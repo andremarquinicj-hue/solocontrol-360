@@ -404,7 +404,7 @@ function Shell({ perfil, children, abas, aba, setAba }) {
           <Logo s={32} />
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 17, letterSpacing: 0.6 }}>SOLOCONTROL</div>
-            <div style={{ fontSize: 11, color: "#AEB8E0" }}>{perfil.nome} · {perfil.papel === "coordenador" ? "Coordenação" : perfil.papel === "usina" ? "Técnico de usina" : perfil.papel === "ambos" ? "Usina + Obra" : "Técnico de obra"}</div>
+            <div style={{ fontSize: 11, color: "#AEB8E0" }}>{perfil.nome} · {perfil.papel === "coordenador" ? "Coordenação" : perfil.papel === "usina" ? "Técnico de usina" : perfil.papel === "ambos" ? "Usina + Obra" : perfil.papel === "diretoria" ? "Diretoria" : "Técnico de obra"}</div>
           </div>
           <BadgeNuvem />
           <button onClick={() => signOut(auth)} title="Sair" style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#fff", borderRadius: 10, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Sair</button>
@@ -721,6 +721,7 @@ function ObraFechamento({ perfil, obra }) {
   const dp = `fechamentos/${fid}`;
   const [f, setF] = useState(null);
   const [fotosNuvem, setFotosNuvem] = useState([]);
+  const [formularios, setFormularios] = useState(false);
   const pronto = useRef(false);
 
   // Carrega (ou cria) o fechamento do dia e escuta as fotos em tempo real
@@ -736,6 +737,7 @@ function ObraFechamento({ perfil, obra }) {
           retorno: d.retorno || "", caminhoesRetorno: d.caminhoesRetorno || "",
           ensaios: d.ensaios?.length ? d.ensaios : [{ estaca: "", gc: "", esp: "", dens: "" }],
           amostras: d.amostras?.length ? d.amostras : [{ ident: "", placa: "", nf: "", trecho: "" }],
+          imprimacao: d.imprimacao || [], imprimCfg: d.imprimCfg || { alvo: "0,8", tol: "0,2", area: "0,09" },
           obs: d.obs || "", fechado: !!d.fechado,
         });
         pronto.current = true;
@@ -752,7 +754,8 @@ function ObraFechamento({ perfil, obra }) {
     const t = setTimeout(() => {
       setDoc(doc(db, "fechamentos", fid), {
         retorno: f.retorno, caminhoesRetorno: f.caminhoesRetorno,
-        ensaios: f.ensaios, amostras: f.amostras, obs: f.obs,
+        ensaios: f.ensaios, amostras: f.amostras,
+        imprimacao: f.imprimacao, imprimCfg: f.imprimCfg, obs: f.obs,
         ultimaEdicao: edicao(perfil),
       }, { merge: true }).catch(() => {});
     }, 900);
@@ -826,6 +829,29 @@ function ObraFechamento({ perfil, obra }) {
       </Cartao>
 
       <Cartao>
+        <div style={{ fontWeight: 800, fontSize: 15.5, color: C.navy, marginBottom: 4 }}>🛢️ Imprimação / pintura de ligação — bandeja</div>
+        <div style={{ fontSize: 12.5, color: C.mut, marginBottom: 10 }}>DNIT 144/2014 · taxa = (peso 02 − peso 01) ÷ área da bandeja. Cálculo e conformidade automáticos.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 10 }}>
+          <span><span style={mini}>Taxa de projeto (l/m²)</span><input style={inp} inputMode="decimal" value={f.imprimCfg.alvo} onChange={(e) => setF({ ...f, imprimCfg: { ...f.imprimCfg, alvo: e.target.value } })} /></span>
+          <span><span style={mini}>Tolerância ±</span><input style={inp} inputMode="decimal" value={f.imprimCfg.tol} onChange={(e) => setF({ ...f, imprimCfg: { ...f.imprimCfg, tol: e.target.value } })} /></span>
+          <span><span style={mini}>Área bandeja (m²)</span><input style={inp} inputMode="decimal" value={f.imprimCfg.area} onChange={(e) => setF({ ...f, imprimCfg: { ...f.imprimCfg, area: e.target.value } })} /></span>
+        </div>
+        {f.imprimacao.map((r, i) => {
+          const cf = calcImprim(r, f.imprimCfg);
+          return (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr auto", gap: 7, marginBottom: 8, alignItems: "end" }}>
+              <span><span style={mini}>Trecho</span><input style={inp} value={r.trecho} onChange={(e) => mudaLista("imprimacao", i, "trecho", e.target.value)} placeholder="Trecho 8 LD" /></span>
+              <span><span style={mini}>Peso 01 (kg)</span><input style={inp} inputMode="decimal" value={r.p1} onChange={(e) => mudaLista("imprimacao", i, "p1", e.target.value)} /></span>
+              <span><span style={mini}>Peso 02 (kg)</span><input style={inp} inputMode="decimal" value={r.p2} onChange={(e) => mudaLista("imprimacao", i, "p2", e.target.value)} /></span>
+              <span style={{ fontSize: 13, fontWeight: 800, paddingBottom: 10, color: cf ? (cf.sit === "conforme" ? C.ok : C.red) : C.mut }}>{cf ? `${cf.taxa.toFixed(2)} l/m²` : "—"}</span>
+              <button onClick={() => rmLinha("imprimacao", i)} style={{ border: "none", background: C.grayBg, color: C.red, borderRadius: 9, width: 34, height: 38, fontWeight: 800, cursor: "pointer" }}>×</button>
+            </div>
+          );
+        })}
+        <Btn tom="claro" onClick={() => addLinha("imprimacao", { trecho: "", p1: "", p2: "" })} style={{ padding: "10px" }}>+ Adicionar medição da bandeja</Btn>
+      </Cartao>
+
+      <Cartao>
         <div style={{ fontWeight: 800, fontSize: 15.5, color: C.navy, marginBottom: 10 }}>📷 Fotos do dia (pista, ensaios, amostras)</div>
         <BotaoFoto obraNome={obra.nome} docPath={dp} campo="fotos" legenda="Fechamento do dia" />
         <Miniaturas fotos={fotosNuvem} />
@@ -833,8 +859,12 @@ function ObraFechamento({ perfil, obra }) {
 
       <Cartao>
         <Campo rotulo="Observações gerais do dia" value={f.obs} onChange={(e) => setF({ ...f, obs: e.target.value })} placeholder="Paralisações, clima, intercorrências…" />
-        <Btn tom="red" onClick={fechar} disabled={f.fechado}>{f.fechado ? "Dia já fechado" : "🔒 Fechar o dia e enviar à coordenação"}</Btn>
+        <div style={{ display: "grid", gap: 8 }}>
+          <Btn tom="claro" onClick={() => setFormularios(true)}>📄 Formulários de campo (CBUQ + imprimação)</Btn>
+          <Btn tom="red" onClick={fechar} disabled={f.fechado}>{f.fechado ? "Dia já fechado" : "🔒 Fechar o dia e enviar à coordenação"}</Btn>
+        </div>
       </Cartao>
+      {formularios && <FormulariosCampo obra={obra} dataRef={dataRef} fechar={() => setFormularios(false)} />}
     </>
   );
 }
@@ -872,9 +902,12 @@ function CoordPainel() {
     </div>
   );
 
+  const [tv, setTv] = useState(false);
   return (
     <>
       <Titulo sub={`Panorama de hoje · ${fmtBR(hojeISO())} · atualiza em tempo real`}>Painel geral</Titulo>
+      <Btn tom="claro" onClick={() => setTv(true)} style={{ marginBottom: 12 }}>📺 Modo TV — painel executivo ao vivo</Btn>
+      {tv && <PainelTV fechar={() => setTv(false)} />}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
         <Kpi v={`${ton.toFixed(1)} t`} r="Massa aplicada/enviada" />
         <Kpi v={cargas.length} r="Cargas no dia" />
@@ -1034,7 +1067,7 @@ function CoordEquipe({ perfil }) {
     await deleteDoc(doc(db, "usuarios", u.uid));
   };
 
-  const rotPapel = { coordenador: "Coordenador", usina: "Técnico de usina", obra: "Técnico de obra", ambos: "Técnico de usina + obra" };
+  const rotPapel = { coordenador: "Coordenador", usina: "Técnico de usina", obra: "Técnico de obra", ambos: "Técnico de usina + obra", diretoria: "Diretoria" };
   return (
     <>
       <Titulo sub="Cada funcionário tem login próprio — todo registro fica assinado com nome e horário.">Equipe</Titulo>
@@ -1048,6 +1081,7 @@ function CoordEquipe({ perfil }) {
             <option value="obra">Técnico de obra</option>
             <option value="usina">Técnico de usina</option>
             <option value="ambos">Técnico de usina + obra</option>
+            <option value="diretoria">Diretoria (somente visualizar)</option>
             <option value="coordenador">Coordenador</option>
           </Sel>
           <Sel rotulo="Obra padrão (opcional)" value={f.obraId} onChange={m("obraId")}>
@@ -1100,6 +1134,8 @@ function CoordRelatorios() {
   const [obraId, setObraId] = useState("");
   const [data, setData] = useState(hojeISO());
   const [rel, setRel] = useState(null);
+  const [carta, setCarta] = useState(null);
+  const [forms, setForms] = useState(null);
   const [msg, setMsg] = useState("");
 
   const gerar = async () => {
@@ -1123,9 +1159,16 @@ function CoordRelatorios() {
         </Sel>
         <Campo rotulo="Data" type="date" value={data} onChange={(e) => setData(e.target.value)} />
         {msg && <div style={{ color: C.red, fontSize: 13.5, fontWeight: 600, marginBottom: 8 }}>{msg}</div>}
-        <Btn onClick={gerar}>Gerar relatório consolidado</Btn>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <Btn onClick={gerar}>📄 Relatório do dia</Btn>
+          <Btn tom="red" onClick={() => { const o = obras.find((x) => x.id === obraId); o ? setCarta(o) : setMsg("Selecione a obra."); }}>📈 Carta de controle</Btn>
+        </div>
+        <div style={{ height: 8 }} />
+        <Btn tom="claro" onClick={() => { const o = obras.find((x) => x.id === obraId); o ? setForms(o) : setMsg("Selecione a obra."); }}>🧾 Formulários de campo (CBUQ + imprimação)</Btn>
       </Cartao>
       {rel && <RelatorioDiario {...rel} fechar={() => setRel(null)} />}
+      {carta && <CartaControle obra={carta} fechar={() => setCarta(null)} />}
+      {forms && <FormulariosCampo obra={forms} dataRef={data} fechar={() => setForms(null)} />}
     </>
   );
 }
@@ -2122,6 +2165,15 @@ function RelatorioDiario({ obra, dataRef, cargas, fech, fechar }) {
               ))}</tbody>
             </table>
           )}
+          {(fech.imprimacao || []).some((r) => calcImprim(r, fech.imprimCfg)) && (
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
+              <thead><tr>{["Imprimação (bandeja)", "Peso 01", "Peso 02", "Taxa (l/m²)", "Situação"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
+              <tbody>{fech.imprimacao.map((r, i) => { const c = calcImprim(r, fech.imprimCfg); return c && (
+                <tr key={i}><td style={tabTd}>{r.trecho || "—"}</td><td style={tabTd}>{r.p1}</td><td style={tabTd}>{r.p2}</td><td style={{ ...tabTd, fontWeight: 800 }}>{c.taxa.toFixed(2)}</td>
+                  <td style={{ ...tabTd, fontWeight: 800, color: c.sit === "conforme" ? C.ok : C.red }}>{c.sit === "conforme" ? "CONFORME" : "NÃO CONFORME"}</td></tr>
+              ); })}</tbody>
+            </table>
+          )}
           {(fech.amostras || []).filter((a) => a.ident || a.placa).length > 0 && (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr>{["Amostra","Placa","NF","Pista/trecho"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
@@ -2241,6 +2293,7 @@ export default function App() {
     if (perfil.papel === "usina") return [
       { id: "nova", ico: "➕", rot: "Nova carga" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }];
+    if (perfil.papel === "diretoria") return [{ id: "tv", ico: "📺", rot: "Painel ao vivo" }];
     if (perfil.papel === "ambos") return [
       { id: "nova", ico: "➕", rot: "Nova" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" },
@@ -2266,6 +2319,7 @@ export default function App() {
           aba === "ensaios" ? <EnsaiosUsina perfil={perfil} /> : <ResumoUsina perfil={perfil} />
         )}
         {(perfil.papel === "obra" || perfil.papel === "ambos") && ["boletins", "fechamento"].includes(aba) && <TelaObra perfil={perfil} aba={aba} />}
+        {perfil.papel === "diretoria" && <PainelTV />}
       </Shell>
     </>
   );
@@ -2292,3 +2346,302 @@ const EstiloGlobal = () => (
     }
   `}</style>
 );
+
+// ============================================================================
+// MODO TV — Painel executivo ao vivo (diretoria)
+// ============================================================================
+function RelogioAoVivo() {
+  const [h, setH] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setH(new Date()), 1000); return () => clearInterval(t); }, []);
+  return <>{h.toLocaleTimeString("pt-BR")}</>;
+}
+
+function PainelTV({ fechar }) {
+  const cargas = useCargasDia(hojeISO());
+  const obras = useObras();
+  const [fechs, setFechs] = useState([]);
+  useEffect(() => onSnapshot(query(collection(db, "fechamentos"), where("dataRef", "==", hojeISO())), (s) =>
+    setFechs(s.docs.map((d) => ({ id: d.id, ...d.data() })))), []);
+
+  const ton = cargas.reduce((s, c) => s + (c.tonelagem || 0), 0);
+  const transito = cargas.filter((c) => c.status === "em_transito");
+  const enc = cargas.filter((c) => c.status === "concluida" || c.status === "nao_conforme");
+  const ncs = cargas.filter((c) => c.status === "nao_conforme" || c.conformeSaida === false);
+  const conf = enc.length ? Math.round((enc.filter((c) => c.status === "concluida").length / enc.length) * 100) : null;
+  const perdas = cargas.map((c) => c.transporte?.perda).filter((v) => v != null);
+  const tempos = cargas.map((c) => c.transporte?.minutos).filter((v) => v != null);
+  const med = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+
+  const Big = ({ v, r, cor }) => (
+    <div style={{ background: "rgba(255,255,255,.06)", borderRadius: 20, padding: "22px 12px", textAlign: "center", border: "1px solid rgba(255,255,255,.09)" }}>
+      <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: "clamp(34px, 5vw, 58px)", lineHeight: 1, color: cor || "#fff" }}>{v}</div>
+      <div style={{ fontSize: "clamp(11px, 1.4vw, 15px)", fontWeight: 700, color: "#8E9AC6", marginTop: 10, textTransform: "uppercase", letterSpacing: 1 }}>{r}</div>
+    </div>
+  );
+  const Sec = ({ t, children }) => (
+    <div style={{ background: "rgba(255,255,255,.05)", borderRadius: 20, padding: 18, border: "1px solid rgba(255,255,255,.08)" }}>
+      <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 17, color: "#AEB8E0", textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 12 }}>{t}</div>
+      {children}
+    </div>
+  );
+
+  return (
+    <div className="nao-imprimir" style={{ position: "fixed", inset: 0, zIndex: 90, background: "linear-gradient(160deg, #0B1230 0%, #101A45 100%)", overflowY: "auto", fontFamily: F.body, padding: "18px clamp(14px, 3vw, 40px) 40px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+        <Logo s={46} />
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: "clamp(20px, 2.6vw, 30px)", color: "#fff", letterSpacing: 1 }}>SOLOCONTROL · PAINEL EXECUTIVO</div>
+          <div style={{ color: "#8E9AC6", fontSize: 14, fontWeight: 600 }}>{fmtBR(hojeISO())} · <RelogioAoVivo /> · <span style={{ color: "#7CE0A3" }}>● AO VIVO</span></div>
+        </div>
+        {fechar
+          ? <button onClick={fechar} style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#fff", borderRadius: 12, padding: "12px 20px", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>✕ Fechar</button>
+          : <button onClick={() => signOut(auth)} style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#fff", borderRadius: 12, padding: "12px 20px", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>Sair</button>}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 14, marginBottom: 16 }}>
+        <Big v={`${ton.toFixed(1)} t`} r="Massa aplicada hoje" />
+        <Big v={cargas.length} r="Cargas no dia" />
+        <Big v={transito.length} r="Em trânsito agora" cor={transito.length ? "#FFC24B" : "#fff"} />
+        <Big v={conf == null ? "—" : `${conf}%`} r="Conformidade" cor={conf == null ? "#fff" : conf < 100 ? "#FF7A7A" : "#7CE0A3"} />
+        <Big v={med(perdas) == null ? "—" : `${med(perdas).toFixed(0)}°C`} r="Perda térmica média" />
+        <Big v={med(tempos) == null ? "—" : fmtMin(Math.round(med(tempos)))} r="Usina → pista (médio)" />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
+        <Sec t="🚚 Em trânsito agora">
+          {!transito.length && <div style={{ color: "#5C6890", fontSize: 15 }}>Nenhum caminhão em trânsito neste momento.</div>}
+          {transito.map((c) => (
+            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,.07)", color: "#fff", fontSize: "clamp(14px, 1.6vw, 18px)" }}>
+              <span style={{ fontWeight: 800 }}>{c.placa} <span style={{ color: "#8E9AC6", fontWeight: 600 }}>→ {c.obraNome}</span></span>
+              <span style={{ color: "#AEB8E0", fontWeight: 700, whiteSpace: "nowrap" }}>{c.horaSaida} · {c.tempSaida}°C · {c.tonelagem} t</span>
+            </div>
+          ))}
+        </Sec>
+
+        <Sec t="🏗️ Obras hoje">
+          {obras.filter((o) => o.status === "ativa").map((o) => {
+            const cs = cargas.filter((c) => c.obraId === o.id);
+            const fe = fechs.find((x) => x.obraId === o.id);
+            const t = cs.reduce((s, c) => s + (c.tonelagem || 0), 0);
+            return (
+              <div key={o.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,.07)", fontSize: "clamp(14px, 1.6vw, 17px)" }}>
+                <span style={{ color: "#fff", fontWeight: 700 }}>{o.nome}</span>
+                <span style={{ whiteSpace: "nowrap", color: "#AEB8E0", fontWeight: 700 }}>
+                  {cs.length} cargas · {t.toFixed(1)} t · {fe?.fechado ? <span style={{ color: "#7CE0A3" }}>dia fechado</span> : <span style={{ color: "#FFC24B" }}>em execução</span>}
+                </span>
+              </div>
+            );
+          })}
+          {!obras.filter((o) => o.status === "ativa").length && <div style={{ color: "#5C6890", fontSize: 15 }}>Nenhuma obra ativa.</div>}
+        </Sec>
+
+        <Sec t="⚠️ Alertas de qualidade">
+          {!ncs.length && <div style={{ color: "#7CE0A3", fontSize: 16, fontWeight: 700 }}>✅ Nenhuma não conformidade hoje.</div>}
+          {ncs.map((c) => (
+            <div key={c.id} style={{ color: "#FF9B9B", fontSize: "clamp(14px, 1.5vw, 16px)", fontWeight: 600, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.07)" }}>
+              {c.obraNome} — {c.placa}: {c.conformeSaida === false ? `saída a ${c.tempSaida}°C (faixa ${LIMITES.tempSaidaMin}–${LIMITES.tempSaidaMax}°C)` : `aplicação a ${c.descarga?.tempAplicacao}°C (mín. ${LIMITES.tempAplicMin}°C)`}
+            </div>
+          ))}
+        </Sec>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// CARTA DE CONTROLE — tendência do teor de ligante e do grau de compactação
+// ============================================================================
+function ChartControle({ pontos, refs = [], titulo, unidade, w = 680, h = 250 }) {
+  if (!pontos.length) return <div style={{ fontSize: 13, color: C.mut, padding: 10 }}>Sem dados registrados para o período.</div>;
+  const vals = [...pontos.map((p) => p.y), ...refs.map((r) => r.v)];
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = Math.max((hi - lo) * 0.25, 0.2);
+  const yMin = lo - pad, yMax = hi + pad;
+  const mx = 46, my = 30;
+  const X = (i) => mx + (pontos.length === 1 ? 0.5 : i / (pontos.length - 1)) * (w - mx - 16);
+  const Y = (v) => h - my - ((v - yMin) / (yMax - yMin)) * (h - my - 16);
+  return (
+    <div style={{ breakInside: "avoid" }}>
+      <div style={{ fontWeight: 800, fontSize: 13.5, color: C.navy, margin: "10px 0 6px" }}>{titulo}</div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10 }}>
+        {[0, 0.25, 0.5, 0.75, 1].map((f) => {
+          const v = yMin + f * (yMax - yMin);
+          return <g key={f}><line x1={mx} x2={w - 16} y1={Y(v)} y2={Y(v)} stroke="#EDF0F7" /><text x={mx - 6} y={Y(v) + 4} fontSize="10" fill={C.mut} textAnchor="end">{v.toFixed(1)}</text></g>;
+        })}
+        {refs.map((r, i) => (
+          <g key={i}>
+            <line x1={mx} x2={w - 16} y1={Y(r.v)} y2={Y(r.v)} stroke={r.cor} strokeDasharray={r.solida ? "" : "6 4"} strokeWidth="1.6" />
+            <text x={w - 18} y={Y(r.v) - 4} fontSize="9.5" fill={r.cor} textAnchor="end" fontWeight="700">{r.rot}</text>
+          </g>
+        ))}
+        <polyline points={pontos.map((p, i) => `${X(i)},${Y(p.y)}`).join(" ")} fill="none" stroke={C.navy} strokeWidth="2" />
+        {pontos.map((p, i) => (
+          <g key={i}>
+            <circle cx={X(i)} cy={Y(p.y)} r="4" fill={p.fora ? C.red : C.ok} stroke="#fff" strokeWidth="1.2" />
+            <text x={X(i)} y={h - 8} fontSize="8.5" fill={C.mut} textAnchor="middle">{p.rot}</text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function CartaControle({ obra, fechar }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const [es, fs] = await Promise.all([
+        getDocs(query(collection(db, "ensaios"), where("obraId", "==", obra.id))),
+        getDocs(query(collection(db, "fechamentos"), where("obraId", "==", obra.id))),
+      ]);
+      const teores = es.docs.map((x) => ({ id: x.id, ...x.data() }))
+        .filter((e) => e.tipo === "teor" && e.resultado?.teor != null)
+        .sort((a, b) => (a.dataRef + (a.criadoEm || "")).localeCompare(b.dataRef + (b.criadoEm || "")));
+      const gcs = fs.docs.map((x) => x.data())
+        .flatMap((f) => (f.ensaios || []).filter((r) => num(r.gc) != null).map((r) => ({ dataRef: f.dataRef, gc: num(r.gc), estaca: r.estaca })))
+        .sort((a, b) => a.dataRef.localeCompare(b.dataRef));
+      setD({ teores, gcs });
+    })();
+  }, [obra.id]);
+
+  if (!d) return null;
+  const tp = d.teores[0]?.resultado?.tp, tol = d.teores[0]?.resultado?.tol ?? 0.3;
+  const est = (arr) => {
+    if (!arr.length) return null;
+    const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const s = arr.length > 1 ? Math.sqrt(arr.reduce((a, b) => a + (b - m) ** 2, 0) / (arr.length - 1)) : 0;
+    return { m, s, n: arr.length };
+  };
+  const eT = est(d.teores.map((e) => e.resultado.teor));
+  const eG = est(d.gcs.map((g) => g.gc));
+  const dentroT = tp != null ? d.teores.filter((e) => Math.abs(e.resultado.teor - tp) <= tol).length : null;
+  const dentroG = d.gcs.filter((g) => g.gc >= LIMITES.gcMin).length;
+
+  return (
+    <Impressao fechar={fechar}>
+      <CabecalhoRel titulo="CARTA DE CONTROLE ESTATÍSTICO" numero={`CC-${(obra.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()}`} obra={obra} dataRef={hojeISO()} />
+
+      <div style={secRel}>1 · Teor de ligante — tendência do processo</div>
+      <ChartControle
+        titulo={tp != null ? `Teor medido vs. projeto ${tp}% ± ${tol}%` : "Teor medido (sem projeto vinculado)"}
+        pontos={d.teores.map((e) => ({ y: e.resultado.teor, rot: `${e.dataRef.slice(8, 10)}/${e.dataRef.slice(5, 7)}`, fora: tp != null && Math.abs(e.resultado.teor - tp) > tol }))}
+        refs={tp != null ? [
+          { v: tp, cor: C.navy, rot: `Projeto ${tp}%` },
+          { v: tp + tol, cor: C.red, rot: `LSC ${(tp + tol).toFixed(2)}%` },
+          { v: tp - tol, cor: C.red, rot: `LIC ${(tp - tol).toFixed(2)}%` },
+        ] : []} />
+      {eT && <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 6 }}><tbody><tr>
+        <td style={tabTd}><b>Ensaios:</b> {eT.n}</td>
+        <td style={tabTd}><b>Média:</b> {eT.m.toFixed(2)}%</td>
+        <td style={tabTd}><b>Desvio-padrão:</b> {eT.s.toFixed(3)}%</td>
+        {dentroT != null && <td style={tabTd}><b>Dentro da tolerância:</b> {dentroT}/{eT.n} ({Math.round((dentroT / eT.n) * 100)}%)</td>}
+      </tr></tbody></table>}
+
+      <div style={secRel}>2 · Grau de compactação — pista</div>
+      <ChartControle
+        titulo={`GC por determinação (mínimo ${LIMITES.gcMin}% — ref. Marshall)`}
+        pontos={d.gcs.map((g) => ({ y: g.gc, rot: `${g.dataRef.slice(8, 10)}/${g.dataRef.slice(5, 7)}`, fora: g.gc < LIMITES.gcMin }))}
+        refs={[{ v: LIMITES.gcMin, cor: C.red, rot: `Mínimo ${LIMITES.gcMin}%` }]} />
+      {eG && <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 6 }}><tbody><tr>
+        <td style={tabTd}><b>Determinações:</b> {eG.n}</td>
+        <td style={tabTd}><b>Média:</b> {eG.m.toFixed(1)}%</td>
+        <td style={tabTd}><b>Desvio-padrão:</b> {eG.s.toFixed(2)}%</td>
+        <td style={tabTd}><b>≥ {LIMITES.gcMin}%:</b> {dentroG}/{eG.n} ({Math.round((dentroG / eG.n) * 100)}%)</td>
+      </tr></tbody></table>}
+
+      <div style={{ fontSize: 10, color: C.mut, marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
+        Pontos verdes: dentro do limite · pontos vermelhos: fora do limite. Valores medidos e registrados em campo pelo sistema Solocontrol; limites conforme projeto e especificação contratual cadastrados. Documento gerado em {fmtDataHora()}.
+      </div>
+    </Impressao>
+  );
+}
+
+// ============================================================================
+// Imprimação (bandeja DNIT 144/2014) — cálculo + Formulários de campo (impressão)
+// ============================================================================
+function calcImprim(r, cfg) {
+  const p1 = num(r.p1), p2 = num(r.p2), area = num(cfg?.area) || 0.09;
+  if (p1 == null || p2 == null || p2 <= p1 || area <= 0) return null;
+  const dif = Math.round((p2 - p1) * 1000) / 1000;
+  const taxa = dif / area; // kg/m² ≈ l/m²
+  const alvo = num(cfg?.alvo) ?? 0.8, tol = num(cfg?.tol) ?? 0.2;
+  return { dif, taxa, alvo, tol, sit: Math.abs(taxa - alvo) <= tol ? "conforme" : "nao_conforme" };
+}
+
+function FormulariosCampo({ obra, dataRef, fechar }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const [cs, fe] = await Promise.all([
+        getDocs(query(collection(db, "cargas"), where("obraId", "==", obra.id), where("dataRef", "==", dataRef))),
+        getDoc(doc(db, "fechamentos", `${obra.id}_${dataRef}`)),
+      ]);
+      const cargas = cs.docs.map((x) => ({ id: x.id, ...x.data() }));
+      cargas.sort((a, b) => (a.horaSaida || "").localeCompare(b.horaSaida || ""));
+      setD({ cargas, fech: fe.exists() ? fe.data() : null });
+    })();
+  }, [obra.id, dataRef]);
+  if (!d) return null;
+  const { cargas, fech } = d;
+  const ton = cargas.reduce((s, c) => s + (c.tonelagem || 0), 0);
+  const cfg = fech?.imprimCfg || { alvo: "0,8", tol: "0,2", area: "0,09" };
+  const medidas = (fech?.imprimacao || []).map((r) => ({ r, c: calcImprim(r, cfg) })).filter((x) => x.c);
+  const tecnicos = [...new Set(cargas.map((c) => c.descarga?.registradoPor || c.chegada?.registradoPor).filter(Boolean))];
+  const celT = { ...tabTd, fontSize: 11.5 };
+  return (
+    <Impressao fechar={fechar}>
+      <CabecalhoRel titulo="CONTROLE DE CAMPO" numero={`CB-${dataRef.replace(/-/g, "")}-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 4).toUpperCase()}`} obra={obra} dataRef={dataRef} />
+
+      <div style={secRel}>Controle de CBUQ — aplicação na pista</div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr>{["Data", "Nº NF", "Placa", "Local de aplicação (pista)", "Quant. NF (t)", "Início", "Fim", "Temp. (°C)"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
+        <tbody>
+          {cargas.map((c) => (
+            <tr key={c.id}>
+              <td style={celT}>{fmtBR(dataRef)}</td>
+              <td style={celT}>{c.nf || "—"}</td>
+              <td style={celT}><b>{c.placa}</b></td>
+              <td style={celT}>{c.descarga?.trecho || "—"}</td>
+              <td style={celT}>{c.tonelagem}</td>
+              <td style={celT}>{c.descarga?.inicio || "—"}</td>
+              <td style={celT}>{c.descarga?.fim || "—"}</td>
+              <td style={{ ...celT, fontWeight: 800, color: c.descarga?.tempAplicacao != null && c.descarga.tempAplicacao < LIMITES.tempAplicMin ? C.red : C.ink }}>{c.descarga?.tempAplicacao ?? "—"}</td>
+            </tr>
+          ))}
+          <tr><td style={celT} colSpan={4}><b>TOTAL</b></td><td style={{ ...celT, fontWeight: 800 }}>{ton.toFixed(2)}</td><td style={celT} colSpan={3}>{cargas.length} carga(s)</td></tr>
+        </tbody>
+      </table>
+
+      {medidas.length > 0 && (
+        <>
+          <div style={secRel}>Imprimação com ligante asfáltico — DNIT 144/2014 (ensaio da bandeja)</div>
+          <div style={{ fontSize: 11, color: C.mut, marginBottom: 6 }}>Taxa de projeto: {cfg.alvo} l/m² · tolerância ± {cfg.tol} · área da bandeja: {cfg.area} m²</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Data", "Trecho aplicado", "Peso 01 (kg)", "Peso 02 (kg)", "Diferença (kg)", "Taxa (l/m²)", "Situação"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
+            <tbody>{medidas.map(({ r, c }, i) => (
+              <tr key={i}>
+                <td style={celT}>{fmtBR(dataRef)}</td>
+                <td style={celT}>{r.trecho || "—"}</td>
+                <td style={celT}>{r.p1}</td>
+                <td style={celT}>{r.p2}</td>
+                <td style={celT}>{c.dif.toFixed(3)}</td>
+                <td style={{ ...celT, fontWeight: 800 }}>{c.taxa.toFixed(2)}</td>
+                <td style={{ ...celT, fontWeight: 800, color: c.sit === "conforme" ? C.ok : C.red }}>{c.sit === "conforme" ? "CONFORME" : "NÃO CONFORME"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </>
+      )}
+
+      {fech?.obs && <><div style={secRel}>Observações</div><div style={{ fontSize: 11.5 }}>{fech.obs}</div></>}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, marginTop: 44, breakInside: "avoid" }}>
+        {[`Técnico de obra${tecnicos.length ? ` — ${tecnicos.join(" / ")}` : ""}`, "Fiscalização / contratante"].map((r) => (
+          <div key={r} style={{ textAlign: "center" }}><div style={{ borderTop: `1.5px solid ${C.ink}`, paddingTop: 5, fontSize: 10.5 }}>{r}</div></div>
+        ))}
+      </div>
+      <div style={{ fontSize: 9.5, color: C.mut, marginTop: 18, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
+        Registros lançados em campo em tempo real pelo sistema Solocontrol, com autoria e horário auditáveis. Documento gerado em {fmtDataHora()}.
+      </div>
+    </Impressao>
+  );
+}
