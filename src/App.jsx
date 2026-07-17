@@ -130,7 +130,7 @@ async function prepararFoto(file, obraNome) {
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d");
   ctx.drawImage(img, 0, 0, w, h);
-  const linhas = [fmtDataHora(), utm || "GPS indisponível", obraNome || "", "SOLOCONTROL 360"].filter(Boolean);
+  const linhas = [fmtDataHora(), utm || "GPS indisponível", obraNome || "", "SOLOCONTROL"].filter(Boolean);
   const fs = Math.max(15, Math.round(w * 0.028));
   ctx.fillStyle = "rgba(0,0,0,.45)";
   ctx.fillRect(0, h - (linhas.length * (fs + 6) + 14), w, linhas.length * (fs + 6) + 14);
@@ -367,7 +367,6 @@ function TelaLogin() {
         <div style={{ textAlign: "center", marginBottom: 22 }}>
           <img src="/logo-solocontrol.png" alt="Solocontrol — Qualidade que constrói confiança"
             style={{ width: 250, maxWidth: "82%", borderRadius: 18, display: "block", margin: "0 auto", boxShadow: "0 10px 30px rgba(0,0,0,.35)" }} />
-          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 24, color: "#fff", letterSpacing: 6, marginTop: 14 }}>3 6 0</div>
           <div style={{ color: "#AEB8E0", fontSize: 13, marginTop: 2 }}>Usina · Transporte · Pista · Laboratório</div>
         </div>
         <div style={{ background: "#fff", borderRadius: 18, padding: 20 }}>
@@ -404,8 +403,8 @@ function Shell({ perfil, children, abas, aba, setAba }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, maxWidth: 900, margin: "0 auto" }}>
           <Logo s={32} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 17, letterSpacing: 0.6 }}>SOLOCONTROL <span style={{ color: "#FF6B6B" }}>360</span></div>
-            <div style={{ fontSize: 11, color: "#AEB8E0" }}>{perfil.nome} · {perfil.papel === "coordenador" ? "Coordenação" : perfil.papel === "usina" ? "Técnico de usina" : "Técnico de obra"}</div>
+            <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 17, letterSpacing: 0.6 }}>SOLOCONTROL</div>
+            <div style={{ fontSize: 11, color: "#AEB8E0" }}>{perfil.nome} · {perfil.papel === "coordenador" ? "Coordenação" : perfil.papel === "usina" ? "Técnico de usina" : perfil.papel === "ambos" ? "Usina + Obra" : "Técnico de obra"}</div>
           </div>
           <BadgeNuvem />
           <button onClick={() => signOut(auth)} title="Sair" style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#fff", borderRadius: 10, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Sair</button>
@@ -418,7 +417,7 @@ function Shell({ perfil, children, abas, aba, setAba }) {
       }}>
         {abas.map((a) => (
           <button key={a.id} onClick={() => setAba(a.id)} style={{
-            background: "none", border: "none", cursor: "pointer", padding: "4px 10px",
+            background: "none", border: "none", cursor: "pointer", padding: "4px 6px", minWidth: 0,
             color: aba === a.id ? C.navy : C.mut, fontWeight: aba === a.id ? 800 : 600, fontFamily: F.body, fontSize: 12,
           }}>
             <div style={{ fontSize: 20 }}>{a.ico}</div>{a.rot}
@@ -1030,7 +1029,12 @@ function CoordEquipe({ perfil }) {
     setOcupado(false);
   };
 
-  const rotPapel = { coordenador: "Coordenador", usina: "Técnico de usina", obra: "Técnico de obra" };
+  const excluir = async (u) => {
+    if (!confirm(`Excluir o acesso de ${u.nome}?\n\nA pessoa perde o login imediatamente e some da lista da equipe. Os registros já feitos permanecem no sistema, assinados com o nome dela.\n\nEssa ação não pode ser desfeita.`)) return;
+    await deleteDoc(doc(db, "usuarios", u.uid));
+  };
+
+  const rotPapel = { coordenador: "Coordenador", usina: "Técnico de usina", obra: "Técnico de obra", ambos: "Técnico de usina + obra" };
   return (
     <>
       <Titulo sub="Cada funcionário tem login próprio — todo registro fica assinado com nome e horário.">Equipe</Titulo>
@@ -1043,6 +1047,7 @@ function CoordEquipe({ perfil }) {
           <Sel rotulo="Papel" value={f.papel} onChange={m("papel")}>
             <option value="obra">Técnico de obra</option>
             <option value="usina">Técnico de usina</option>
+            <option value="ambos">Técnico de usina + obra</option>
             <option value="coordenador">Coordenador</option>
           </Sel>
           <Sel rotulo="Obra padrão (opcional)" value={f.obraId} onChange={m("obraId")}>
@@ -1063,10 +1068,14 @@ function CoordEquipe({ perfil }) {
               <div style={{ fontSize: 12.5, color: C.mut }}>{rotPapel[u.papel] || u.papel} · {u.email}</div>
             </div>
             {u.uid !== perfil.uid && (
-              <Btn tom={u.ativo ? "red" : "ok"} cheio={false} style={{ padding: "8px 12px", fontSize: 13 }}
-                onClick={() => updateDoc(doc(db, "usuarios", u.uid), { ativo: !u.ativo })}>
-                {u.ativo ? "Desativar" : "Reativar"}
-              </Btn>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn tom={u.ativo ? "red" : "ok"} cheio={false} style={{ padding: "8px 12px", fontSize: 13 }}
+                  onClick={() => updateDoc(doc(db, "usuarios", u.uid), { ativo: !u.ativo })}>
+                  {u.ativo ? "Desativar" : "Reativar"}
+                </Btn>
+                <Btn tom="claro" cheio={false} style={{ padding: "8px 12px", fontSize: 13, color: C.red, borderColor: "#F3C2C2" }}
+                  onClick={() => excluir(u)}>🗑️ Excluir</Btn>
+              </div>
             )}
           </div>
           {u.papel !== "coordenador" && (
@@ -1916,7 +1925,7 @@ function CabecalhoRel({ titulo, numero, obra, dataRef }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: `3px solid ${C.navy}`, paddingBottom: 10 }}>
         <Logo s={46} />
         <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 22, color: C.navy }}>SOLOCONTROL <span style={{ color: C.red }}>360</span></div>
+          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 22, color: C.navy }}>SOLOCONTROL</div>
           <div style={{ fontSize: 11, color: C.mut }}>Qualidade que constrói confiança · Controle tecnológico de massa asfáltica</div>
         </div>
         <div style={{ textAlign: "right" }}>
@@ -2039,7 +2048,7 @@ function RelatorioUsina({ obra, dataRef, cargas, ensaios, projeto, analise, fech
         ))}
       </div>
       <div style={{ fontSize: 9.5, color: C.mut, marginTop: 18, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
-        Critério adotado conforme projeto e especificação contratual cadastrados. Documento gerado pelo Solocontrol 360 em {fmtDataHora()} · Código de verificação: {verif}
+        Critério adotado conforme projeto e especificação contratual cadastrados. Documento gerado pelo sistema Solocontrol em {fmtDataHora()} · Código de verificação: {verif}
       </div>
     </Impressao>
   );
@@ -2135,7 +2144,7 @@ function RelatorioDiario({ obra, dataRef, cargas, fech, fechar }) {
         ))}
       </div>
       <div style={{ fontSize: 9.5, color: C.mut, marginTop: 18, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
-        Documento gerado pelo Solocontrol 360 em {fmtDataHora()} · Nº {numero} · Registros assinados digitalmente por usuário autenticado.
+        Documento gerado pelo sistema Solocontrol em {fmtDataHora()} · Nº {numero} · Registros assinados digitalmente por usuário autenticado.
       </div>
     </Impressao>
   );
@@ -2202,7 +2211,7 @@ function ResumoObra({ obra, cargas, fechs, fechar }) {
         ))}
       </div>
       <div style={{ fontSize: 9.5, color: C.mut, marginTop: 18, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
-        Documento gerado pelo Solocontrol 360 em {fmtDataHora()} · Consolida {ord.length} cargas e {fechs.length} fechamento(s) diário(s) registrados em nuvem.
+        Documento gerado pelo sistema Solocontrol em {fmtDataHora()} · Consolida {ord.length} cargas e {fechs.length} fechamento(s) diário(s) registrados em nuvem.
       </div>
     </Impressao>
   );
@@ -2232,6 +2241,10 @@ export default function App() {
     if (perfil.papel === "usina") return [
       { id: "nova", ico: "➕", rot: "Nova carga" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }];
+    if (perfil.papel === "ambos") return [
+      { id: "nova", ico: "➕", rot: "Nova" }, { id: "dia", ico: "🚚", rot: "Cargas" },
+      { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" },
+      { id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar" }];
     return [{ id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar dia" }];
   }, [perfil?.papel]);
   useEffect(() => { if (abas.length && !abas.find((a) => a.id === aba)) setAba(abas[0].id); }, [abas]);
@@ -2247,12 +2260,12 @@ export default function App() {
       <EstiloGlobal />
       <Shell perfil={perfil} abas={abas} aba={aba} setAba={setAba}>
         {perfil.papel === "coordenador" && <TelaCoordenador perfil={perfil} aba={aba} />}
-        {perfil.papel === "usina" && (
+        {(perfil.papel === "usina" || perfil.papel === "ambos") && ["nova", "dia", "ensaios", "resumo"].includes(aba) && (
           aba === "nova" ? <UsinaNovaCarga perfil={perfil} /> :
           aba === "dia" ? <UsinaCargasDia perfil={perfil} /> :
           aba === "ensaios" ? <EnsaiosUsina perfil={perfil} /> : <ResumoUsina perfil={perfil} />
         )}
-        {perfil.papel === "obra" && <TelaObra perfil={perfil} aba={aba} />}
+        {(perfil.papel === "obra" || perfil.papel === "ambos") && ["boletins", "fechamento"].includes(aba) && <TelaObra perfil={perfil} aba={aba} />}
       </Shell>
     </>
   );
