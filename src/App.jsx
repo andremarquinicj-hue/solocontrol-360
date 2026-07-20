@@ -5,6 +5,7 @@
 // Nuvem: Firebase Auth + Firestore (offline-first) + Storage (fotos)
 // ============================================================================
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { auth, db, storage, firebaseConfig } from "./firebase";
 import {
   onAuthStateChanged, signInWithEmailAndPassword, signOut,
@@ -2181,17 +2182,16 @@ function BotaoPDF({ nome, estilo }) {
 
 function Impressao({ children, fechar, link, estatico, nomeArquivo = "relatorio-solocontrol.pdf" }) {
   if (estatico) {
-    return (
+    return createPortal(
       <div className="area-impressao" style={{ background: "#fff", minHeight: "100vh" }}>
         <div className="nao-imprimir" style={{ display: "flex", gap: 8, padding: 10, background: C.navy, flexWrap: "wrap", position: "sticky", top: 0, zIndex: 5 }}>
           <BotaoPDF nome={nomeArquivo} estilo={{ flex: 1, minWidth: 170 }} />
           <Btn tom="claro" cheio={false} onClick={() => window.print()} style={{ padding: "13px 18px" }}>🖨️ Imprimir</Btn>
         </div>
         <div style={{ maxWidth: 780, margin: "0 auto", padding: "18px 20px 60px", fontFamily: F.body, color: C.ink }}>{children}</div>
-      </div>
-    );
+      </div>, document.body);
   }
-  return (
+  return createPortal(
     <div className="area-impressao" style={{ position: "fixed", inset: 0, background: "#fff", zIndex: 100, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
       <div className="nao-imprimir" style={{ position: "sticky", top: 0, display: "flex", gap: 8, padding: 10, background: C.navy, zIndex: 5, flexWrap: "wrap" }}>
         <BotaoPDF nome={nomeArquivo} estilo={{ flex: 1, minWidth: 170 }} />
@@ -2199,8 +2199,7 @@ function Impressao({ children, fechar, link, estatico, nomeArquivo = "relatorio-
         <Btn tom="claro" cheio={false} onClick={fechar} style={{ padding: "13px 18px" }}>Fechar</Btn>
       </div>
       <div style={{ maxWidth: 780, margin: "0 auto", padding: "18px 20px 60px", fontFamily: F.body, color: C.ink }}>{children}</div>
-    </div>
-  );
+    </div>, document.body);
 }
 const tabTh = { textAlign: "left", padding: "5px 6px", fontSize: 10.5, color: "#fff", background: C.navy };
 const tabTd = { padding: "5px 6px", fontSize: 11, borderBottom: `1px solid ${C.line}` };
@@ -2589,11 +2588,14 @@ const EstiloGlobal = () => (
     * { -webkit-tap-highlight-color: transparent; }
     input, select, textarea { outline-color: ${C.navy}; }
     @media print {
-      body * { visibility: hidden; }
-      .area-impressao, .area-impressao * { visibility: visible; }
-      .area-impressao { position: static !important; inset: auto !important; overflow: visible !important; height: auto !important; }
-      html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+      html, body { height: auto !important; overflow: visible !important; background: #fff !important;
+        -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      body > *:not(.area-impressao) { display: none !important; }
+      .area-impressao { position: static !important; inset: auto !important; overflow: visible !important;
+        height: auto !important; min-height: 0 !important; z-index: auto !important; }
       .nao-imprimir { display: none !important; }
+      table, figure, svg { break-inside: avoid; page-break-inside: avoid; }
+      thead { display: table-header-group; }
       @page { size: A4; margin: 12mm; }
     }
   `}</style>
