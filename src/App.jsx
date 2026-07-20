@@ -2108,13 +2108,84 @@ const linkRel = (tipo, obraId, data) => `${location.origin}/?rel=${tipo}&obra=${
 const ehStandalone = () => (typeof window !== "undefined") &&
   (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
 
-function Impressao({ children, fechar, link, estatico }) {
-  const standalone = ehStandalone();
+// ----------------------------------------------------------------------------
+// Geração de PDF dentro do próprio app (funciona no app instalado no iPhone,
+// onde o iOS bloqueia a impressão). Abre o compartilhamento para salvar em
+// Arquivos, enviar no WhatsApp ou por e-mail.
+// ----------------------------------------------------------------------------
+async function gerarPDF(nomeArquivo, aviso) {
+  const area = document.querySelector(".area-impressao");
+  if (!area) return;
+  aviso("Carregando gerador…");
+  const [{ jsPDF }, h2c] = await Promise.all([import("jspdf"), import("html2canvas")]);
+  const html2canvas = h2c.default;
+
+  const clone = area.cloneNode(true);
+  clone.querySelectorAll(".nao-imprimir").forEach((el) => el.remove());
+  clone.querySelectorAll("textarea").forEach((t) => t.remove());
+  const caixa = document.createElement("div");
+  caixa.style.cssText = "position:fixed;left:-10000px;top:0;width:820px;background:#fff;padding:26px;box-sizing:border-box;font-family:Inter,sans-serif";
+  caixa.appendChild(clone);
+  document.body.appendChild(caixa);
+
+  try {
+    aviso("Montando o documento…");
+    // Escala limitada para não estourar o limite de canvas do iPhone
+    const areaPx = caixa.scrollWidth * caixa.scrollHeight;
+    const escala = Math.max(1, Math.min(2, Math.sqrt(14000000 / Math.max(areaPx, 1))));
+    const canvas = await html2canvas(caixa, { scale: escala, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 20000 });
+
+    const pdf = new jsPDF({ unit: "mm", format: "a4" });
+    const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+    const mg = 8, larg = pw - mg * 2, alt = ph - mg * 2;
+    const pxMm = canvas.width / larg;
+    const alturaPagina = Math.floor(alt * pxMm);
+    let y = 0, pag = 0;
+    while (y < canvas.height) {
+      const fatia = Math.min(alturaPagina, canvas.height - y);
+      const c2 = document.createElement("canvas");
+      c2.width = canvas.width; c2.height = fatia;
+      c2.getContext("2d").drawImage(canvas, 0, y, canvas.width, fatia, 0, 0, canvas.width, fatia);
+      if (pag) pdf.addPage();
+      pdf.addImage(c2.toDataURL("image/jpeg", 0.88), "JPEG", mg, mg, larg, fatia / pxMm);
+      y += fatia; pag++;
+      aviso(`Montando página ${pag}…`);
+    }
+
+    const blob = pdf.output("blob");
+    const arquivo = new File([blob], nomeArquivo, { type: "application/pdf" });
+    if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
+      aviso("Abrindo compartilhamento…");
+      await navigator.share({ files: [arquivo], title: nomeArquivo });
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = nomeArquivo; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+  } catch (e) {
+    if (e?.name !== "AbortError") alert("Não foi possível gerar o PDF. Tente de novo com o app aberto e conectado.");
+  } finally {
+    caixa.remove();
+    aviso("");
+  }
+}
+
+function BotaoPDF({ nome, estilo }) {
+  const [msg, setMsg] = useState("");
+  return (
+    <Btn tom="red" cheio={false} disabled={!!msg} onClick={() => gerarPDF(nome, setMsg)} style={estilo}>
+      {msg || "📤 Exportar / enviar PDF"}
+    </Btn>
+  );
+}
+
+function Impressao({ children, fechar, link, estatico, nomeArquivo = "relatorio-solocontrol.pdf" }) {
   if (estatico) {
     return (
       <div className="area-impressao" style={{ background: "#fff", minHeight: "100vh" }}>
-        <div className="nao-imprimir" style={{ background: C.blueBg, color: C.navy, fontSize: 13.5, fontWeight: 600, padding: "12px 16px", lineHeight: 1.5 }}>
-          📄 Para salvar em PDF: toque em <b>Compartilhar</b> (ícone ↑) → <b>Imprimir</b> → e depois em <b>Compartilhar</b> de novo para salvar ou enviar o PDF. No computador: <b>Ctrl+P</b>.
+        <div className="nao-imprimir" style={{ display: "flex", gap: 8, padding: 10, background: C.navy, flexWrap: "wrap", position: "sticky", top: 0, zIndex: 5 }}>
+          <BotaoPDF nome={nomeArquivo} estilo={{ flex: 1, minWidth: 170 }} />
+          <Btn tom="claro" cheio={false} onClick={() => window.print()} style={{ padding: "13px 18px" }}>🖨️ Imprimir</Btn>
         </div>
         <div style={{ maxWidth: 780, margin: "0 auto", padding: "18px 20px 60px", fontFamily: F.body, color: C.ink }}>{children}</div>
       </div>
@@ -2123,12 +2194,10 @@ function Impressao({ children, fechar, link, estatico }) {
   return (
     <div className="area-impressao" style={{ position: "fixed", inset: 0, background: "#fff", zIndex: 100, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
       <div className="nao-imprimir" style={{ position: "sticky", top: 0, display: "flex", gap: 8, padding: 10, background: C.navy, zIndex: 5, flexWrap: "wrap" }}>
-        {standalone && link
-          ? <a href={link} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 160, textDecoration: "none", textAlign: "center", background: C.red, color: "#fff", fontFamily: F.body, fontWeight: 700, fontSize: 15, borderRadius: 12, padding: "13px 18px" }}>📤 Exportar / salvar PDF</a>
-          : <Btn tom="red" cheio={false} onClick={() => window.print()} style={{ flex: 1, minWidth: 160 }}>📤 Exportar / salvar PDF</Btn>}
+        <BotaoPDF nome={nomeArquivo} estilo={{ flex: 1, minWidth: 170 }} />
+        {!ehStandalone() && <Btn tom="claro" cheio={false} onClick={() => window.print()} style={{ padding: "13px 16px" }}>🖨️ Imprimir</Btn>}
         <Btn tom="claro" cheio={false} onClick={fechar} style={{ padding: "13px 18px" }}>Fechar</Btn>
       </div>
-      {standalone && link && <div className="nao-imprimir" style={{ background: C.warnBg, color: C.amber, fontSize: 12.5, fontWeight: 600, padding: "9px 14px" }}>O iPhone só gera PDF fora do app instalado — o botão acima abre este relatório no navegador, onde o PDF é gerado.</div>}
       <div style={{ maxWidth: 780, margin: "0 auto", padding: "18px 20px 60px", fontFamily: F.body, color: C.ink }}>{children}</div>
     </div>
   );
@@ -2222,7 +2291,7 @@ function RelatorioUsina({ obra, dataRef, cargas, ensaios, projeto, analise, fech
   const verif = `${numero}·${cargas.length}C·${ensaios.length}E·${ton.toFixed(0)}T`;
   const historico = ensaios.flatMap((e) => (e.historico || []).map((h) => `${e.codigo} corrigido por ${h.por} em ${fmtBR(h.em?.slice(0, 10))}`));
   return (
-    <Impressao fechar={fechar} link={linkRel("usina", obra?.id, dataRef)} estatico={estatico}>
+    <Impressao fechar={fechar} link={linkRel("usina", obra?.id, dataRef)} estatico={estatico} nomeArquivo={`${numero}.pdf`}>
       <CabecalhoRel titulo="RELATÓRIO DIÁRIO DA USINA" numero={numero} obra={obra} dataRef={dataRef} />
       <div style={secRel}>1 · Situação geral (por eixo)</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody>
@@ -2292,7 +2361,7 @@ function RelatorioDiario({ obra, dataRef, cargas, fech, fechar, estatico }) {
   const numero = `RD-${dataRef.replace(/-/g, "")}-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 4).toUpperCase()}`;
   const ensGC = (fech?.ensaios || []).filter((r) => num(r.gc) != null);
   return (
-    <Impressao fechar={fechar} link={linkRel("diario", obra?.id, dataRef)} estatico={estatico}>
+    <Impressao fechar={fechar} link={linkRel("diario", obra?.id, dataRef)} estatico={estatico} nomeArquivo={`${numero}.pdf`}>
       <CabecalhoRel titulo="RELATÓRIO DIÁRIO CONSOLIDADO" numero={numero} obra={obra} dataRef={dataRef} />
       <div style={secRel}>1 · Resumo executivo</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody><tr>
@@ -2393,7 +2462,7 @@ function ResumoObra({ obra, cargas, fechs, fechar, estatico }) {
   const amostras = fechs.flatMap((f) => (f.amostras || []).filter((a) => a.ident || a.placa));
   const numero = `RG-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()}`;
   return (
-    <Impressao fechar={fechar} link={linkRel("resumo", obra?.id)} estatico={estatico}>
+    <Impressao fechar={fechar} link={linkRel("resumo", obra?.id)} estatico={estatico} nomeArquivo={`${numero}.pdf`}>
       <CabecalhoRel titulo="RESUMO GERAL DA OBRA" numero={numero} obra={obra} dataRef={obra.dataConclusao || hojeISO()} />
       <div style={secRel}>1 · Síntese da execução</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody>
@@ -2701,7 +2770,7 @@ function CartaControle({ obra, fechar, estatico }) {
   const dentroG = d.gcs.filter((g) => g.gc >= LIMITES.gcMin).length;
 
   return (
-    <Impressao fechar={fechar} link={linkRel("carta", obra?.id)} estatico={estatico}>
+    <Impressao fechar={fechar} link={linkRel("carta", obra?.id)} estatico={estatico} nomeArquivo={`CC-${(obra.nome || "OBRA").replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}.pdf`}>
       <CabecalhoRel titulo="CARTA DE CONTROLE ESTATÍSTICO" numero={`CC-${(obra.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()}`} obra={obra} dataRef={hojeISO()} />
 
       <div style={secRel}>1 · Teor de ligante — tendência do processo</div>
@@ -2772,7 +2841,7 @@ function FormulariosCampo({ obra, dataRef, fechar, estatico }) {
   const tecnicos = [...new Set(cargas.map((c) => c.descarga?.registradoPor || c.chegada?.registradoPor).filter(Boolean))];
   const celT = { ...tabTd, fontSize: 11.5 };
   return (
-    <Impressao fechar={fechar} link={linkRel("campo", obra?.id, dataRef)} estatico={estatico}>
+    <Impressao fechar={fechar} link={linkRel("campo", obra?.id, dataRef)} estatico={estatico} nomeArquivo={`CB-${dataRef.replace(/-/g, "")}.pdf`}>
       <CabecalhoRel titulo="CONTROLE DE CAMPO" numero={`CB-${dataRef.replace(/-/g, "")}-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 4).toUpperCase()}`} obra={obra} dataRef={dataRef} />
 
       <div style={secRel}>Controle de CBUQ — aplicação na pista</div>
@@ -3050,7 +3119,7 @@ function RelatorioAplicacao({ obra, cargas, fechs, fechar, estatico }) {
   const numero = `RA-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()}`;
 
   return (
-    <Impressao fechar={fechar} link={linkRel("aplicacao", obra?.id)} estatico={estatico}>
+    <Impressao fechar={fechar} link={linkRel("aplicacao", obra?.id)} estatico={estatico} nomeArquivo={`${numero}.pdf`}>
       <CabecalhoRel titulo="RELATÓRIO TÉCNICO DE APLICAÇÃO" numero={numero} obra={obra} dataRef={obra?.dataConclusao || hojeISO()} />
 
       <div style={secRel}>1 · Situação por eixo (execução na pista)</div>
