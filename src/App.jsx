@@ -16,7 +16,7 @@ import {
   collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot,
   query, where, getDoc, getDocs, arrayUnion,
 } from "firebase/firestore";
-import { ref as sRef, uploadString, getDownloadURL } from "firebase/storage";
+import { ref as sRef, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
 
 // ----------------------------------------------------------------------------
 // Parâmetros técnicos (DNIT 031/2006-ES — confirmar sempre com o projeto)
@@ -1316,6 +1316,7 @@ function CoordRelatorios() {
         <div style={{ height: 8 }} />
         <Btn tom="claro" onClick={() => { const o = obras.find((x) => x.id === obraId); o ? setForms(o) : setMsg("Selecione a obra."); }}>🧾 Formulários de campo (CBUQ + imprimação)</Btn>
       </Cartao>
+      {obraId && <DocsCoordenacao obra={obras.find((o) => o.id === obraId)} />}
       {rel && <RelatorioDiario {...rel} fechar={() => setRel(null)} />}
       {carta && <CartaControle obra={carta} fechar={() => setCarta(null)} />}
       {forms && <FormulariosCampo obra={forms} dataRef={data} fechar={() => setForms(null)} />}
@@ -1845,10 +1846,14 @@ function EnsaiosUsina({ perfil }) {
     <>
       <CabecalhoUsina obras={obras} ctx={ctx} setCtx={setCtx} />
       <div style={{ display: "flex", gap: 4, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, padding: 4, marginBottom: 12 }}>
-        <Seg id="ensaios" rot="🧪 Ensaios" /><Seg id="projetos" rot="📐 Projetos" /><Seg id="equip" rot="⚙️ Equip." />
+        <Seg id="ensaios" rot="🧪 Ensaios" /><Seg id="projetos" rot="📐 Projetos" /><Seg id="equip" rot="⚙️ Equip." /><Seg id="lab" rot="📎 Laudos" />
       </div>
 
       {sub === "equip" && <BlocoEquipamentos perfil={perfil} />}
+
+      {sub === "lab" && (!ctx.obraId || !obra
+        ? <Cartao><div style={{ color: C.mut, textAlign: "center" }}>Selecione a obra para anexar documentos do laboratório.</div></Cartao>
+        : <DocsLaboratorio perfil={perfil} obra={obra} usinaNome={ctx.usina} />)}
 
       {sub === "projetos" && (
         <>
@@ -2071,6 +2076,7 @@ function ResumoUsina({ perfil }) {
       </div>
       {ensaioDevido && <Cartao style={{ background: C.redBg, borderColor: C.red }}><div style={{ color: C.red, fontWeight: 700, fontSize: 13.5 }}>⏰ Ensaio devido: produção desde o último ensaio ({tonDesde.toFixed(0)} t) atingiu a frequência configurada de {freqTon} t.</div></Cartao>}
       {!ensaios.length && cargas.length > 0 && <Cartao style={{ background: C.warnBg }}><div style={{ color: C.amber, fontWeight: 700, fontSize: 13.5 }}>⚠️ Produção do dia ainda sem cobertura de ensaio.</div></Cartao>}
+      <AvisoLaudoSemana obraId={ctx.obraId} />
 
       <Cartao>
         <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Situação por eixo (sem selo único)</div>
@@ -2141,15 +2147,44 @@ async function gerarPDF(nomeArquivo, aviso) {
     const mg = 8, larg = pw - mg * 2, alt = ph - mg * 2;
     const pxMm = canvas.width / larg;
     const alturaPagina = Math.floor(alt * pxMm);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    // Procura uma linha "vazia" (faixa branca) perto do fim da página para não
+    // cortar fotos, tabelas ou gráficos no meio.
+    const linhaLimpa = (y) => {
+      try {
+        const d = ctx.getImageData(0, y, canvas.width, 1).data;
+        for (let x = 0; x < canvas.width; x += 8) {
+          const p = x * 4;
+          if (d[p] < 246 || d[p + 1] < 246 || d[p + 2] < 246) return false;
+        }
+        return true;
+      } catch { return true; }
+    };
+    const cortePara = (inicio) => {
+      const ideal = inicio + alturaPagina;
+      if (ideal >= canvas.height) return canvas.height;
+      const limite = Math.floor(alturaPagina * 0.22); // recua no máx. 22% da página
+      for (let d = 0; d < limite; d++) {
+        const y = ideal - d;
+        if (y <= inicio + 40) break;
+        if (linhaLimpa(y) && linhaLimpa(y - 3) && linhaLimpa(y + 3)) return y;
+      }
+      return ideal;
+    };
+
     let y = 0, pag = 0;
     while (y < canvas.height) {
-      const fatia = Math.min(alturaPagina, canvas.height - y);
+      const fim = cortePara(y);
+      const fatia = fim - y;
       const c2 = document.createElement("canvas");
       c2.width = canvas.width; c2.height = fatia;
-      c2.getContext("2d").drawImage(canvas, 0, y, canvas.width, fatia, 0, 0, canvas.width, fatia);
+      const cc = c2.getContext("2d");
+      cc.fillStyle = "#ffffff"; cc.fillRect(0, 0, c2.width, c2.height);
+      cc.drawImage(canvas, 0, y, canvas.width, fatia, 0, 0, canvas.width, fatia);
       if (pag) pdf.addPage();
       pdf.addImage(c2.toDataURL("image/jpeg", 0.88), "JPEG", mg, mg, larg, fatia / pxMm);
-      y += fatia; pag++;
+      y = fim; pag++;
       aviso(`Montando página ${pag}…`);
     }
 
@@ -2346,7 +2381,11 @@ function RelatorioUsina({ obra, dataRef, cargas, ensaios, projeto, analise, fech
 function RelatorioDiario({ obra, dataRef, cargas, fech, fechar, estatico }) {
   const [ensaios, setEnsaios] = useState([]);
   const [analise, setAnalise] = useState(null);
+  const [docsLab, setDocsLab] = useState([]);
   useEffect(() => {
+    getDocs(query(collection(db, "documentos"), where("obraId", "==", obra.id))).then((s) => {
+      setDocsLab(s.docs.map((d) => ({ id: d.id, ...d.data() })).filter((d) => cobrePeriodo(d, dataRef)));
+    }).catch(() => {});
     getDocs(query(collection(db, "ensaios"), where("obraId", "==", obra.id), where("dataRef", "==", dataRef))).then((s) => {
       const a = s.docs.map((d) => ({ id: d.id, ...d.data() })); a.sort((x, y) => (x.criadoEm || "").localeCompare(y.criadoEm || "")); setEnsaios(a);
     }).catch(() => {});
@@ -2425,6 +2464,24 @@ function RelatorioDiario({ obra, dataRef, cargas, fech, fechar, estatico }) {
               ))}</tbody>
             </table>
           )}
+        </>
+      )}
+      {docsLab.length > 0 && (
+        <>
+          <div style={secRel}>Documentos do laboratório referentes a esta data</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
+            <thead><tr>{["Tipo", "Referência", "Arquivo", "Laboratório · responsável", "Enviado por"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
+            <tbody>{docsLab.map((d) => (
+              <tr key={d.id}>
+                <td style={tabTd}><b>{(TIPOS_DOC[d.tipo] || TIPOS_DOC.outro).rot}</b></td>
+                <td style={tabTd}>{d.periodoInicio ? `${fmtBR(d.periodoInicio)} a ${fmtBR(d.periodoFim)}` : fmtBR(d.dataRef)}</td>
+                <td style={tabTd}>{d.arquivo?.nome || "—"}</td>
+                <td style={tabTd}>{d.laboratorio || "—"} · {d.responsavel || "—"}</td>
+                <td style={tabTd}>{d.enviadoPor}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+          <FotosRel titulo="Documentos do laboratório (imagens anexadas)" fotos={docsLab.filter(ehImagem).map((d) => ({ id: d.id, url: d.arquivo.url, legenda: `${(TIPOS_DOC[d.tipo] || TIPOS_DOC.outro).rot} · ${d.laboratorio || ""}` }))} />
         </>
       )}
       <FotosRel titulo="Registro fotográfico — usina" fotos={cargas.flatMap((c) => c.fotosUsina || [])} />
@@ -3290,5 +3347,198 @@ function RelatorioAplicacao({ obra, cargas, fechs, fechar, estatico }) {
         Documento gerado pelo sistema Solocontrol em {fmtDataHora()} · Nº {numero} · Consolida {cargas.length} carga(s) e {fechs.length} fechamento(s) diário(s) com registros auditáveis.
       </div>
     </Impressao>
+  );
+}
+
+// ============================================================================
+// DOCUMENTOS DO LABORATÓRIO — anexos enviados pelo laboratório da usina
+// Fluxo real: relatório PARCIAL no dia · relatório COMPLETO no fim da semana
+// ============================================================================
+const TIPOS_DOC = {
+  parcial:  { rot: "Relatório parcial (do dia)",     ico: "📄", cor: C.blue,  bg: C.blueBg },
+  completo: { rot: "Relatório completo (semanal)",   ico: "📚", cor: C.ok,    bg: C.okBg },
+  laudo:    { rot: "Laudo / certificado",            ico: "🧾", cor: C.pur,   bg: C.purBg },
+  outro:    { rot: "Outro documento",                ico: "📎", cor: C.mut,   bg: C.grayBg },
+};
+
+// Semana de referência (segunda a domingo) — usada para cobrar o relatório completo
+function semanaDe(iso) {
+  const d = new Date(`${iso}T12:00:00`);
+  const dia = (d.getDay() + 6) % 7;            // 0 = segunda
+  const seg = new Date(d); seg.setDate(d.getDate() - dia);
+  const dom = new Date(seg); dom.setDate(seg.getDate() + 6);
+  const fmt = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  return { inicio: fmt(seg), fim: fmt(dom), rot: `${fmtBR(fmt(seg))} a ${fmtBR(fmt(dom))}` };
+}
+const cobrePeriodo = (doc_, dataIso) => {
+  if (doc_.periodoInicio && doc_.periodoFim) return dataIso >= doc_.periodoInicio && dataIso <= doc_.periodoFim;
+  return doc_.dataRef === dataIso;
+};
+const ehImagem = (d) => (d.arquivo?.tipo || "").startsWith("image/");
+const tamanhoKB = (b) => (b == null ? "" : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+
+function useDocumentos(obraId) {
+  const [l, setL] = useState([]);
+  useEffect(() => {
+    if (!obraId) return setL([]);
+    return onSnapshot(query(collection(db, "documentos"), where("obraId", "==", obraId)), (s) => {
+      const a = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+      a.sort((x, y) => (y.dataRef + (y.criadoEm || "")).localeCompare(x.dataRef + (x.criadoEm || "")));
+      setL(a);
+    });
+  }, [obraId]);
+  return l;
+}
+
+// ----------------------------------------------------------------------------
+// Envio do documento (PDF ou foto da folha) — usina
+// ----------------------------------------------------------------------------
+function DocsLaboratorio({ perfil, obra, usinaNome }) {
+  const docs = useDocumentos(obra?.id);
+  const hoje = hojeISO();
+  const sem = semanaDe(hoje);
+  const [f, setF] = useState({ tipo: "parcial", dataRef: hoje, periodoInicio: sem.inicio, periodoFim: sem.fim, laboratorio: "", responsavel: "", obs: "" });
+  const [enviando, setEnviando] = useState("");
+  const refArq = useRef(null);
+  const m = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const enviar = async (file) => {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) return alert("Arquivo muito grande (máx. 25 MB). Reduza o PDF ou envie por partes.");
+    setEnviando("Enviando para a nuvem…");
+    try {
+      const id = rid();
+      const limpo = file.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(-60);
+      const caminho = `documentos/${obra.id}/${id}_${limpo}`;
+      const r = sRef(storage, caminho);
+      await uploadBytes(r, file, { contentType: file.type || "application/octet-stream" });
+      const url = await getDownloadURL(r);
+      const dados = {
+        obraId: obra.id, obraNome: obra.nome, usina: usinaNome || "",
+        tipo: f.tipo, dataRef: f.tipo === "completo" ? f.periodoFim : f.dataRef,
+        periodoInicio: f.tipo === "completo" ? f.periodoInicio : "", periodoFim: f.tipo === "completo" ? f.periodoFim : "",
+        laboratorio: f.laboratorio.trim(), responsavel: f.responsavel.trim(), obs: f.obs.trim(),
+        arquivo: { nome: file.name, url, tipo: file.type || "", tamanho: file.size, caminho },
+        enviadoPor: perfil.nome, uid: perfil.uid, criadoEm: agoraISO(),
+      };
+      await setDoc(doc(collection(db, "documentos")), dados);
+      setF((v) => ({ ...v, obs: "" }));
+      setEnviando("");
+      alert("✅ Documento anexado. A coordenação já consegue visualizar.");
+    } catch {
+      setEnviando("");
+      alert("Não foi possível enviar. Verifique a internet e tente de novo.");
+    }
+  };
+
+  const excluir = async (d) => {
+    if (!confirm(`Excluir o documento "${d.arquivo?.nome}"?`)) return;
+    await deleteDoc(doc(db, "documentos", d.id)).catch(() => alert("Falha ao excluir."));
+  };
+
+  const completoSemana = docs.find((d) => d.tipo === "completo" && d.periodoInicio === sem.inicio);
+  const parciaisSemana = docs.filter((d) => d.tipo === "parcial" && d.dataRef >= sem.inicio && d.dataRef <= sem.fim);
+
+  return (
+    <>
+      <Cartao style={{ background: completoSemana ? C.okBg : C.warnBg, borderColor: completoSemana ? "#BBE6C8" : "#F3DDB5" }}>
+        <div style={{ fontWeight: 800, color: completoSemana ? C.ok : C.amber, fontSize: 14 }}>
+          {completoSemana ? "✅ Relatório completo da semana recebido" : "⏳ Relatório completo da semana ainda não recebido"}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.mut, marginTop: 4 }}>
+          Semana {sem.rot} · {parciaisSemana.length} relatório(s) parcial(is) anexado(s){completoSemana ? ` · completo enviado por ${completoSemana.enviadoPor}` : ""}
+        </div>
+      </Cartao>
+
+      <Cartao>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 4 }}>📎 Anexar documento do laboratório</div>
+        <div style={{ fontSize: 12.5, color: C.mut, marginBottom: 10 }}>Aceita PDF ou foto da folha. Fica arquivado na obra e visível para a coordenação.</div>
+        <Sel rotulo="Tipo de documento" value={f.tipo} onChange={m("tipo")}>
+          {Object.entries(TIPOS_DOC).map(([k, v]) => <option key={k} value={k}>{v.ico} {v.rot}</option>)}
+        </Sel>
+        {f.tipo === "completo"
+          ? <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Campo rotulo="Período — início" type="date" value={f.periodoInicio} onChange={m("periodoInicio")} />
+              <Campo rotulo="Período — fim" type="date" value={f.periodoFim} onChange={m("periodoFim")} />
+            </div>
+          : <Campo rotulo="Data de referência" type="date" value={f.dataRef} onChange={m("dataRef")} />}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <Campo rotulo="Laboratório" value={f.laboratorio} onChange={m("laboratorio")} placeholder="Ex.: AUTEM — Araraquara" />
+          <Campo rotulo="Responsável técnico" value={f.responsavel} onChange={m("responsavel")} placeholder="Ex.: Paulo Henrique" />
+        </div>
+        <Campo rotulo="Observações" value={f.obs} onChange={m("obs")} placeholder="Ex.: ensaios Marshall das amostras AM-01 a AM-04" />
+        <input ref={refArq} type="file" accept="application/pdf,image/*" style={{ display: "none" }}
+          onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; enviar(file); }} />
+        <Btn onClick={() => refArq.current?.click()} disabled={!!enviando}>{enviando || "📎 Escolher arquivo e anexar"}</Btn>
+      </Cartao>
+
+      <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 16, color: C.navy, margin: "14px 2px 8px", textTransform: "uppercase" }}>Documentos anexados</div>
+      {!docs.length && <Cartao><div style={{ color: C.mut, textAlign: "center" }}>Nenhum documento anexado nesta obra ainda.</div></Cartao>}
+      {docs.map((d) => <CartaoDoc key={d.id} d={d} aoExcluir={() => excluir(d)} />)}
+    </>
+  );
+}
+
+function CartaoDoc({ d, aoExcluir }) {
+  const t = TIPOS_DOC[d.tipo] || TIPOS_DOC.outro;
+  return (
+    <Cartao>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <div style={{ fontWeight: 800, color: C.navy, fontSize: 14.5 }}>{t.ico} {d.arquivo?.nome || "documento"}</div>
+        <span style={{ fontSize: 11, fontWeight: 700, color: t.cor, background: t.bg, padding: "3px 9px", borderRadius: 99, whiteSpace: "nowrap" }}>{t.rot}</span>
+      </div>
+      <Linha k="Referência" v={d.periodoInicio ? `${fmtBR(d.periodoInicio)} a ${fmtBR(d.periodoFim)}` : fmtBR(d.dataRef)} forte />
+      {(d.laboratorio || d.responsavel) && <Linha k="Laboratório · responsável" v={`${d.laboratorio || "—"} · ${d.responsavel || "—"}`} />}
+      {d.obs && <Linha k="Observações" v={d.obs} />}
+      <Linha k="Enviado por" v={`${d.enviadoPor} · ${fmtBR((d.criadoEm || "").slice(0, 10))} · ${tamanhoKB(d.arquivo?.tamanho)}`} />
+      {ehImagem(d) && d.arquivo?.url && (
+        <img src={d.arquivo.url} alt="" style={{ width: "100%", maxHeight: 220, objectFit: "cover", borderRadius: 10, border: `1px solid ${C.line}`, marginTop: 8 }} />
+      )}
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <a href={d.arquivo?.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, textAlign: "center", textDecoration: "none", background: C.navy, color: "#fff", fontFamily: F.body, fontWeight: 700, fontSize: 14, borderRadius: 11, padding: "11px 14px" }}>
+          {ehImagem(d) ? "🔍 Abrir imagem" : "📄 Abrir PDF"}
+        </a>
+        {aoExcluir && <Btn tom="claro" cheio={false} onClick={aoExcluir} style={{ padding: "11px 14px", fontSize: 13, color: C.red, borderColor: "#F3C2C2" }}>🗑️</Btn>}
+      </div>
+    </Cartao>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Coordenação — laudos do laboratório por obra
+// ----------------------------------------------------------------------------
+function DocsCoordenacao({ obra }) {
+  const docs = useDocumentos(obra?.id);
+  const [filtro, setFiltro] = useState("todos");
+  const lista = filtro === "todos" ? docs : docs.filter((d) => d.tipo === filtro);
+  if (!obra) return null;
+  return (
+    <>
+      <Cartao>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>📎 Documentos do laboratório · {obra.nome}</div>
+        <Sel rotulo="Filtrar por tipo" value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ marginBottom: 0 }}>
+          <option value="todos">Todos ({docs.length})</option>
+          {Object.entries(TIPOS_DOC).map(([k, v]) => <option key={k} value={k}>{v.rot} ({docs.filter((d) => d.tipo === k).length})</option>)}
+        </Sel>
+      </Cartao>
+      {!lista.length && <Cartao><div style={{ color: C.mut, textAlign: "center" }}>Nenhum documento nesse filtro.</div></Cartao>}
+      {lista.map((d) => <CartaoDoc key={d.id} d={d} />)}
+    </>
+  );
+}
+
+// Aviso do relatório completo da semana (Resumo da usina)
+function AvisoLaudoSemana({ obraId }) {
+  const docs = useDocumentos(obraId);
+  if (!obraId) return null;
+  const sem = semanaDe(hojeISO());
+  const completo = docs.find((d) => d.tipo === "completo" && d.periodoInicio === sem.inicio);
+  const parciais = docs.filter((d) => d.tipo === "parcial" && d.dataRef >= sem.inicio && d.dataRef <= sem.fim).length;
+  return (
+    <Cartao style={{ background: completo ? C.okBg : C.grayBg, borderColor: completo ? "#BBE6C8" : C.line }}>
+      <div style={{ fontWeight: 700, fontSize: 13.5, color: completo ? C.ok : C.mut }}>
+        📎 Laboratório · semana {sem.rot}: {completo ? "relatório completo recebido" : "aguardando relatório completo"} · {parciais} parcial(is)
+      </div>
+    </Cartao>
   );
 }
