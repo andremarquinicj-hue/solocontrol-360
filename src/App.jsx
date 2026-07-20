@@ -115,8 +115,27 @@ const pegarGPS = () => new Promise((res) => {
 // ----------------------------------------------------------------------------
 // Foto: compressão + marca d'água (data/hora, UTM, obra, SOLOCONTROL 360)
 // ----------------------------------------------------------------------------
+let _logoMarca = null;
+function carregarLogoMarca() {
+  if (_logoMarca) return Promise.resolve(_logoMarca);
+  return new Promise((res) => {
+    const i = new Image();
+    i.onload = () => { _logoMarca = i; res(i); };
+    // Falha transitória (ex.: 4G oscilando)? Não memoriza — tenta de novo na próxima foto.
+    i.onerror = () => { _logoMarca = null; res(false); };
+    i.src = "/logo-solocontrol.png";
+  });
+}
+if (typeof window !== "undefined") setTimeout(() => carregarLogoMarca(), 800); // pré-carrega ao abrir o app
+const MESES = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
+function dataExtenso() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0"), mm = String(d.getMinutes()).padStart(2, "0"), ss = String(d.getSeconds()).padStart(2, "0");
+  return `${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()} às ${hh}:${mm}:${ss}`;
+}
+
 async function prepararFoto(file, obraNome) {
-  const utm = await pegarGPS();
+  const [utm, logo] = await Promise.all([pegarGPS(), carregarLogoMarca()]);
   const b64 = await new Promise((res, rej) => {
     const r = new FileReader();
     r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
@@ -124,22 +143,33 @@ async function prepararFoto(file, obraNome) {
   const img = await new Promise((res, rej) => {
     const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = b64;
   });
-  const MAX = 1100;
+  const MAX = 1280;
   const esc = Math.min(1, MAX / Math.max(img.width, img.height));
   const w = Math.round(img.width * esc), h = Math.round(img.height * esc);
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d");
   ctx.drawImage(img, 0, 0, w, h);
-  const linhas = [fmtDataHora(), utm || "GPS indisponível", obraNome || "", "SOLOCONTROL"].filter(Boolean);
-  const fs = Math.max(15, Math.round(w * 0.028));
-  ctx.fillStyle = "rgba(0,0,0,.45)";
-  ctx.fillRect(0, h - (linhas.length * (fs + 6) + 14), w, linhas.length * (fs + 6) + 14);
-  ctx.font = `600 ${fs}px Arial`; ctx.textAlign = "right";
+
+  // Logo oficial da Solocontrol no canto superior direito
+  if (logo) {
+    const lw = Math.max(150, Math.round(w * 0.22));
+    const lh = Math.round(lw * (logo.height / logo.width));
+    ctx.shadowColor = "rgba(0,0,0,.35)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 2;
+    ctx.drawImage(logo, w - lw - Math.round(w * 0.015), Math.round(w * 0.015), lw, lh);
+    ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  }
+
+  // Data por extenso + UTM + tag da obra, em branco com sombra (padrão de campo)
+  const linhas = [dataExtenso(), utm || "GPS indisponível", obraNome ? `#${obraNome.toUpperCase()}` : (logo ? "" : "SOLOCONTROL")].filter(Boolean);
+  const fs = Math.max(17, Math.round(w * 0.036));
+  ctx.font = `700 ${fs}px Arial`; ctx.textAlign = "right";
+  ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = Math.round(fs * 0.35); ctx.shadowOffsetY = 1;
   linhas.forEach((l, i) => {
     ctx.fillStyle = "#fff";
-    ctx.fillText(l, w - 12, h - 10 - (linhas.length - 1 - i) * (fs + 6));
+    ctx.fillText(l, w - Math.round(w * 0.02), h - Math.round(w * 0.02) - (linhas.length - 1 - i) * (fs + Math.round(fs * 0.3)));
   });
-  return { id: rid(), b64: cv.toDataURL("image/jpeg", 0.78), utm: utm || "", hora: agoraHM() };
+  ctx.shadowColor = "transparent";
+  return { id: rid(), b64: cv.toDataURL("image/jpeg", 0.8), utm: utm || "", hora: agoraHM() };
 }
 
 // ----------------------------------------------------------------------------
@@ -147,6 +177,9 @@ async function prepararFoto(file, obraNome) {
 // se estiver sem sinal, a foto fica guardada no aparelho e o app reenvia
 // sozinho quando a internet voltar.
 // ----------------------------------------------------------------------------
+// Rascunhos em memória: fotos e formulários abertos sobrevivem à troca de abas
+const RASCUNHOS = {};
+
 const LS_FILA = "sc360_fila_fotos";
 const lerFila = () => { try { return JSON.parse(localStorage.getItem(LS_FILA) || "[]"); } catch { return []; } };
 const gravarFila = (f) => { try { localStorage.setItem(LS_FILA, JSON.stringify(f)); } catch {} window.dispatchEvent(new Event("sc360fila")); };
@@ -258,48 +291,90 @@ const Linha = ({ k, v, forte }) => (
   </div>
 );
 
-// Miniaturas de fotos (mostra pendência de envio quando sem internet)
-const Miniaturas = ({ fotos = [], locais = [], aoRemoverLocal }) => (
-  (fotos.length || locais.length) ? (
-    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-      {fotos.map((f) => (
-        <div key={f.id} style={{ position: "relative" }}>
-          {f.url
-            ? <img src={f.url} alt="" style={{ width: 74, height: 74, objectFit: "cover", borderRadius: 10, border: `1px solid ${C.line}` }} />
-            : <div style={{ width: 74, height: 74, borderRadius: 10, background: C.grayBg, display: "grid", placeItems: "center", fontSize: 11, color: C.mut, textAlign: "center", border: `1px dashed ${C.line}` }}>⏳ enviando<br />p/ nuvem</div>}
-        </div>
-      ))}
-      {locais.map((f, i) => (
-        <div key={f.id} style={{ position: "relative" }}>
-          <img src={f.b64} alt="" style={{ width: 74, height: 74, objectFit: "cover", borderRadius: 10, border: `1px solid ${C.line}` }} />
-          {aoRemoverLocal && <button onClick={() => aoRemoverLocal(i)} style={{ position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 99, border: "none", background: C.red, color: "#fff", fontWeight: 800, fontSize: 12, cursor: "pointer" }}>×</button>}
-        </div>
-      ))}
+async function baixarFoto(src, nome) {
+  try {
+    const blob = await (await fetch(src)).blob();
+    const file = new File([blob], nome, { type: blob.type || "image/jpeg" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file] }); // iPhone: abre "Salvar imagem"
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = nome; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { if (e?.name !== "AbortError") alert("Não foi possível baixar a foto. Verifique a internet."); }
+}
+
+function VisorFoto({ src, nome, fechar }) {
+  return (
+    <div className="nao-imprimir" onClick={fechar} style={{ position: "fixed", inset: 0, zIndex: 120, background: "rgba(8,12,32,.94)", display: "flex", flexDirection: "column", padding: "14px" }}>
+      <div style={{ flex: 1, display: "grid", placeItems: "center", minHeight: 0 }}>
+        <img src={src} alt="" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,.5)" }} />
+      </div>
+      <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 10, paddingTop: 12, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+        <Btn tom="red" onClick={() => baixarFoto(src, nome)} style={{ flex: 1 }}>⬇️ Baixar / salvar na galeria</Btn>
+        <Btn tom="claro" cheio={false} onClick={fechar} style={{ padding: "13px 22px" }}>Fechar</Btn>
+      </div>
     </div>
-  ) : null
-);
+  );
+}
+
+const Miniaturas = ({ fotos = [], locais = [], aoRemoverLocal }) => {
+  const [ver, setVer] = useState(null);
+  if (!fotos.length && !locais.length) return null;
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        {fotos.map((f) => (
+          <div key={f.id} style={{ position: "relative" }}>
+            {f.url
+              ? <img src={f.url} alt="" onClick={() => setVer({ src: f.url, nome: `solocontrol-${f.id}.jpg` })} style={{ width: 74, height: 74, objectFit: "cover", borderRadius: 10, border: `1px solid ${C.line}`, cursor: "pointer" }} />
+              : <div style={{ width: 74, height: 74, borderRadius: 10, background: C.grayBg, display: "grid", placeItems: "center", fontSize: 11, color: C.mut, textAlign: "center", border: `1px dashed ${C.line}` }}>⏳ enviando<br />p/ nuvem</div>}
+          </div>
+        ))}
+        {locais.map((f, i) => (
+          <div key={f.id} style={{ position: "relative" }}>
+            <img src={f.b64} alt="" onClick={() => setVer({ src: f.b64, nome: `solocontrol-${f.id}.jpg` })} style={{ width: 74, height: 74, objectFit: "cover", borderRadius: 10, border: `1px solid ${C.line}`, cursor: "pointer" }} />
+            {aoRemoverLocal && <button onClick={() => aoRemoverLocal(i)} style={{ position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 99, border: "none", background: C.red, color: "#fff", fontWeight: 800, fontSize: 12, cursor: "pointer" }}>×</button>}
+          </div>
+        ))}
+      </div>
+      {ver && <VisorFoto {...ver} fechar={() => setVer(null)} />}
+    </>
+  );
+};
 
 // Botão de câmera: docPath definido → envia direto pra nuvem;
 // sem docPath → guarda localmente até o registro ser salvo (modo diferido).
-function BotaoFoto({ obraNome, docPath, campo, legenda, aoLocal, rotulo = "📷 Adicionar foto" }) {
-  const ref = useRef(null);
+function BotaoFoto({ obraNome, docPath, campo, legenda, aoLocal, rotulo = "📷 Câmera" }) {
+  const refCam = useRef(null);
+  const refGal = useRef(null);
   const [ocupado, setOcupado] = useState(false);
+  const processar = async (files) => {
+    if (!files?.length) return;
+    setOcupado(true);
+    try {
+      for (const file of files) {
+        const foto = await prepararFoto(file, obraNome);
+        if (docPath) await anexarFoto(docPath, campo, foto, legenda || "");
+        else aoLocal && aoLocal(foto);
+      }
+    } finally { setOcupado(false); }
+  };
   return (
     <>
-      <input ref={ref} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
-        onChange={async (e) => {
-          const file = e.target.files?.[0]; e.target.value = "";
-          if (!file) return;
-          setOcupado(true);
-          try {
-            const foto = await prepararFoto(file, obraNome);
-            if (docPath) await anexarFoto(docPath, campo, foto, legenda || "");
-            else aoLocal && aoLocal(foto);
-          } finally { setOcupado(false); }
-        }} />
-      <Btn tom="claro" onClick={() => ref.current?.click()} disabled={ocupado} style={{ padding: "11px 14px" }}>
-        {ocupado ? "Processando…" : rotulo}
-      </Btn>
+      <input ref={refCam} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
+        onChange={(e) => { const fs = [...(e.target.files || [])]; e.target.value = ""; processar(fs); }} />
+      <input ref={refGal} type="file" accept="image/*" multiple style={{ display: "none" }}
+        onChange={(e) => { const fs = [...(e.target.files || [])]; e.target.value = ""; processar(fs); }} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn tom="claro" cheio={false} onClick={() => refCam.current?.click()} disabled={ocupado} style={{ padding: "11px 10px", flex: 1.4, whiteSpace: "nowrap" }}>
+          {ocupado ? "Processando…" : rotulo}
+        </Btn>
+        <Btn tom="claro" cheio={false} onClick={() => refGal.current?.click()} disabled={ocupado} style={{ padding: "11px 10px", flex: 1, whiteSpace: "nowrap" }}>
+          🖼️ Galeria
+        </Btn>
+      </div>
     </>
   );
 }
@@ -464,13 +539,15 @@ function UsinaNovaCarga({ perfil }) {
   const [f, setF] = useState(() => {
     try { return { ...JSON.parse(localStorage.getItem(RASCUNHO) || "{}") }; } catch { return {}; }
   });
-  const [fotos, setFotos] = useState([]);
+  const [fotos, setFotos] = useState(() => RASCUNHOS.fotosNovaCarga || []);
   const [msg, setMsg] = useState("");
   const [salvando, setSalvando] = useState(false);
   const m = (k) => (e) => setF((v) => ({ ...v, [k]: e.target.value }));
 
   // Rascunho automático no aparelho (não perde nem fechando o app)
   useEffect(() => { try { localStorage.setItem(RASCUNHO, JSON.stringify(f)); } catch {} }, [f]);
+  // Fotos pendentes seguram ao navegar entre as abas, até lançar a carga
+  useEffect(() => { RASCUNHOS.fotosNovaCarga = fotos; }, [fotos]);
 
   const obra = obras.find((o) => o.id === f.obraId);
   const t = num(f.tempSaida);
@@ -480,13 +557,14 @@ function UsinaNovaCarga({ perfil }) {
     setMsg("");
     if (!f.obraId) return setMsg("Selecione a obra de destino.");
     if (!f.usina?.trim()) return setMsg("Informe a usina de origem.");
-    if (!f.placa?.trim() || t == null || !num(f.tonelagem)) return setMsg("Preencha placa, tonelagem e temperatura.");
+    if (!f.placa?.trim() || t == null) return setMsg("Preencha a placa e a temperatura de saída.");
     setSalvando(true);
     try {
       const dados = {
         dataRef: hojeISO(), obraId: f.obraId, obraNome: obra?.nome || "",
-        usina: f.usina.trim(), placa: f.placa.trim().toUpperCase(), nf: (f.nf || "").trim(),
-        tonelagem: num(f.tonelagem), tempSaida: t, horaSaida: f.horaSaida || agoraHM(),
+        usina: f.usina.trim(), placa: f.placa.trim().toUpperCase(),
+        nf: "", tonelagem: null, // informados pela equipe da obra, que recebe a nota fiscal
+        tempSaida: t, horaSaida: f.horaSaida || agoraHM(),
         conformeSaida: !tempFora, status: "em_transito",
         fotosUsina: [], chegada: null, descarga: null, transporte: null,
         criadoPor: { uid: perfil.uid, nome: perfil.nome }, criadoEm: agoraISO(), ultimaEdicao: edicao(perfil),
@@ -498,6 +576,7 @@ function UsinaNovaCarga({ perfil }) {
       fotos.forEach((foto) => anexarFoto(`cargas/${dref.id}`, "fotosUsina", foto, "Carregamento na usina"));
       setF((v) => ({ obraId: v.obraId, usina: v.usina })); // mantém obra e usina p/ próxima carga
       setFotos([]);
+      delete RASCUNHOS.fotosNovaCarga;
       setMsg("ok");
     } catch { setMsg("Falha ao salvar — os dados continuam no rascunho, tente de novo."); }
     setSalvando(false);
@@ -514,11 +593,10 @@ function UsinaNovaCarga({ perfil }) {
         <Campo rotulo="Usina de origem *" value={f.usina || ""} onChange={m("usina")} placeholder="Ex.: AUTEM — Araraquara" />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <Campo rotulo="Placa do caminhão *" value={f.placa || ""} onChange={m("placa")} placeholder="AXE1F20" autoCapitalize="characters" />
-          <Campo rotulo="Nota fiscal" value={f.nf || ""} onChange={m("nf")} placeholder="8504" inputMode="numeric" />
-          <Campo rotulo="Tonelagem *" sufixo="t" value={f.tonelagem || ""} onChange={m("tonelagem")} placeholder="0,0" inputMode="decimal" />
           <Campo rotulo="Temp. de saída *" sufixo="°C" value={f.tempSaida || ""} onChange={m("tempSaida")} placeholder="160" inputMode="decimal" />
           <Campo rotulo="Hora de saída" type="time" value={f.horaSaida || agoraHM()} onChange={m("horaSaida")} />
         </div>
+        <div style={{ fontSize: 12.5, color: C.mut, background: C.blueBg, borderRadius: 10, padding: "8px 12px", marginBottom: 10 }}>ℹ️ Nota fiscal e peso são informados pela equipe da obra, que recebe a nota em mãos.</div>
         {tempFora && <div style={{ background: C.redBg, color: C.red, fontSize: 13, fontWeight: 600, borderRadius: 10, padding: "9px 12px", marginBottom: 10 }}>
           ⚠️ Fora da faixa {LIMITES.tempSaidaMin}–{LIMITES.tempSaidaMax} °C — a carga será marcada como não conforme na saída.
         </div>}
@@ -544,7 +622,7 @@ function UsinaCargasDia({ perfil }) {
       {minhas.map((c) => (
         <Cartao key={c.id}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 18, color: C.navy }}>{c.placa} · {c.tonelagem} t</div>
+            <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 18, color: C.navy }}>{c.placa}{c.tonelagem != null ? ` · ${c.tonelagem} t` : ""}</div>
             <Chip st={c.status} />
           </div>
           <Linha k="Obra" v={c.obraNome} />
@@ -604,6 +682,8 @@ function ObraBoletins({ perfil, obra }) {
 function Boletim({ c, perfil, obra }) {
   const dp = `cargas/${c.id}`;
   const [ch, setCh] = useState({ hora: agoraHM(), temp: "" });
+  const [nt, setNt] = useState({ nf: c.nf || "", ton: c.tonelagem ?? "" });
+  useEffect(() => { setNt({ nf: c.nf || "", ton: c.tonelagem ?? "" }); }, [c.nf, c.tonelagem]);
   const [de, setDe] = useState({ tempAplicacao: "", trecho: "", espessura: "", clima: "", obs: "" });
   const [editar, setEditar] = useState(false);
   useEffect(() => { if (c.chegada) setCh({ hora: c.chegada.hora || agoraHM(), temp: c.chegada.temp ?? "" }); }, [c.chegada?.hora]);
@@ -613,21 +693,37 @@ function Boletim({ c, perfil, obra }) {
   const salvarCampo = (caminho, v) => updateDoc(doc(db, dp), { [caminho]: v, ultimaEdicao: edicao(perfil) }).catch(() => {});
 
   const confirmarChegada = () => {
-    const t = num(ch.temp);
-    if (t == null) return alert("Informe a temperatura de chegada.");
     const minutos = minutosEntre(c.horaSaida, ch.hora);
-    const perda = c.tempSaida != null ? Math.round((c.tempSaida - t) * 10) / 10 : null;
+    const t = num(ch.temp);
+    const upd = {
+      "chegada.hora": ch.hora, "chegada.registradoPor": perfil.nome,
+      "transporte.minutos": minutos, status: "no_local", ultimaEdicao: edicao(perfil),
+    };
+    if (t != null) { upd["chegada.temp"] = t; upd["transporte.perda"] = c.tempSaida != null ? Math.round((c.tempSaida - t) * 10) / 10 : null; }
+    updateDoc(doc(db, dp), upd).catch(() => {});
+  };
+  const salvarTempChegada = (v) => {
+    const t = num(v); if (t == null) return;
     updateDoc(doc(db, dp), {
-      "chegada.hora": ch.hora, "chegada.temp": t,
-      "chegada.registradoPor": perfil.nome,
-      transporte: { minutos, perda }, status: "no_local", ultimaEdicao: edicao(perfil),
+      "chegada.temp": t,
+      "transporte.perda": c.tempSaida != null ? Math.round((c.tempSaida - t) * 10) / 10 : null,
+      ultimaEdicao: edicao(perfil),
     }).catch(() => {});
   };
+  const salvarNota = () => salvarCampo("nf", (nt.nf || "").trim());
+  const salvarPeso = () => salvarCampo("tonelagem", num(nt.ton));
+  const camposNotaPeso = (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      <Campo rotulo="Nota fiscal" inputMode="numeric" value={nt.nf} onChange={(e) => setNt({ ...nt, nf: e.target.value })} onBlur={salvarNota} placeholder="8535" />
+      <Campo rotulo="Peso da nota" sufixo="t" inputMode="decimal" value={nt.ton} onChange={(e) => setNt({ ...nt, ton: e.target.value })} onBlur={salvarPeso} placeholder="27,79" />
+    </div>
+  );
   const iniciarDescarga = () => updateDoc(doc(db, dp), { "descarga.inicio": agoraHM(), status: "descarregando", ultimaEdicao: edicao(perfil) }).catch(() => {});
   const finalizar = () => {
     const t = num(de.tempAplicacao);
     if (t == null) return alert("Informe a temperatura na aplicação.");
     if (!de.trecho?.trim()) return alert("Informe o trecho/estaca.");
+    if ((!(nt.nf || "").trim() || num(nt.ton) == null) && !confirm("Nota fiscal e/ou peso ainda não informados. Finalizar mesmo assim?")) return;
     const conforme = t >= LIMITES.tempAplicMin && c.conformeSaida !== false;
     updateDoc(doc(db, dp), {
       "descarga.fim": agoraHM(), "descarga.tempAplicacao": t, "descarga.trecho": de.trecho,
@@ -648,27 +744,26 @@ function Boletim({ c, perfil, obra }) {
         <Chip st={c.status} />
       </div>
       <Linha k="Usina de origem" v={c.usina} />
-      <Linha k="Saída" v={`${c.horaSaida} · ${c.tempSaida} °C · ${c.tonelagem} t`} />
+      <Linha k="Saída" v={`${c.horaSaida} · ${c.tempSaida} °C${c.tonelagem != null ? ` · ${c.tonelagem} t` : ""}`} />
       {c.transporte && <Linha k="Transporte" v={`${fmtMin(c.transporte.minutos)} · perda térmica ${c.transporte.perda ?? "—"} °C`} forte />}
       {perdaAlta && <div style={{ background: C.warnBg, color: C.amber, fontSize: 13, fontWeight: 600, borderRadius: 10, padding: "8px 12px", margin: "8px 0" }}>⚠️ Perda térmica acima de {LIMITES.perdaAlerta} °C no transporte.</div>}
 
       {c.status === "em_transito" && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
           <div style={{ fontWeight: 800, color: C.ink, fontSize: 14.5, marginBottom: 8 }}>📍 Registrar chegada na obra</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Campo rotulo="Hora da chegada" type="time" value={ch.hora} onChange={(e) => setCh({ ...ch, hora: e.target.value })} />
-            <Campo rotulo="Temp. de chegada" sufixo="°C" inputMode="decimal" value={ch.temp} onChange={(e) => setCh({ ...ch, temp: e.target.value })} />
-          </div>
-          <BotaoFoto obraNome={c.obraNome} docPath={dp} campo="chegada.fotos" legenda="Chegada na obra" rotulo="📷 Foto da carga chegando" />
-          <Miniaturas fotos={c.chegada?.fotos} />
-          <div style={{ height: 10 }} />
+          <Campo rotulo="Hora da chegada" type="time" value={ch.hora} onChange={(e) => setCh({ ...ch, hora: e.target.value })} />
           <Btn tom="ok" onClick={confirmarChegada}>✔ Confirmar chegada</Btn>
+          <div style={{ fontSize: 12.5, color: C.mut, marginTop: 8 }}>Depois de confirmar, você adianta temperatura, nota, peso e fotos enquanto o caminhão aguarda a descarga.</div>
         </div>
       )}
 
       {c.status === "no_local" && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
-          <Linha k="Chegada" v={`${c.chegada?.hora} · ${c.chegada?.temp} °C`} />
+          <div style={{ fontWeight: 800, color: C.ink, fontSize: 14.5, marginBottom: 2 }}>🕓 Na obra · chegou {c.chegada?.hora}</div>
+          <div style={{ fontSize: 12.5, color: C.mut, marginBottom: 10 }}>Aguardando descarga — adiante os dados (tudo salva sozinho na nuvem):</div>
+          <Campo rotulo="Temp. de chegada" sufixo="°C" inputMode="decimal" value={ch.temp} onChange={(e) => setCh({ ...ch, temp: e.target.value })} onBlur={(e) => salvarTempChegada(e.target.value)} />
+          {camposNotaPeso}
+          <BotaoFoto obraNome={c.obraNome} docPath={dp} campo="chegada.fotos" legenda="Chegada na obra" rotulo="📷 Foto da carga" />
           <Miniaturas fotos={c.chegada?.fotos} />
           <div style={{ height: 10 }} />
           <Btn onClick={iniciarDescarga}>▶ Iniciar descarga</Btn>
@@ -678,6 +773,7 @@ function Boletim({ c, perfil, obra }) {
       {(c.status === "descarregando" || (encerrada && editar)) && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
           <div style={{ fontWeight: 800, color: C.ink, fontSize: 14.5, marginBottom: 8 }}>⬇️ Descarga e aplicação {c.descarga?.inicio ? `· início ${c.descarga.inicio}` : ""}</div>
+          {camposNotaPeso}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Campo rotulo="Temp. na aplicação *" sufixo="°C" inputMode="decimal" value={de.tempAplicacao} onChange={(e) => setDe({ ...de, tempAplicacao: e.target.value })} onBlur={(e) => salvarCampo("descarga.tempAplicacao", num(e.target.value) ?? "")} />
             <Campo rotulo="Espessura solta (gabarito)" sufixo="cm" inputMode="decimal" value={de.espessura} onChange={(e) => setDe({ ...de, espessura: e.target.value })} onBlur={(e) => salvarCampo("descarga.espessura", e.target.value)} />
@@ -702,6 +798,7 @@ function Boletim({ c, perfil, obra }) {
           <Linha k="Chegada" v={`${c.chegada?.hora || "—"} · ${c.chegada?.temp ?? "—"} °C`} />
           <Linha k="Descarga" v={`${c.descarga?.inicio || "—"} → ${c.descarga?.fim || "—"}`} />
           <Linha k="Aplicação" v={`${c.descarga?.tempAplicacao ?? "—"} °C · ${c.descarga?.trecho || "—"}`} />
+          <Linha k="Nota · peso" v={`NF ${c.nf || "—"} · ${c.tonelagem ?? "—"} t`} />
           {c.descarga?.espessura && <Linha k="Espessura solta" v={`${c.descarga.espessura} cm`} />}
           <Miniaturas fotos={[...(c.chegada?.fotos || []), ...(c.descarga?.fotos || [])]} />
           <button onClick={() => setEditar(true)} style={{ background: "none", border: "none", color: C.blue, fontWeight: 700, fontSize: 13, marginTop: 8, cursor: "pointer", padding: 0 }}>✏️ Corrigir dados</button>
@@ -721,6 +818,7 @@ function ObraFechamento({ perfil, obra }) {
   const dp = `fechamentos/${fid}`;
   const [f, setF] = useState(null);
   const [fotosNuvem, setFotosNuvem] = useState([]);
+  const [fotosImprim, setFotosImprim] = useState([]);
   const [formularios, setFormularios] = useState(false);
   const pronto = useRef(false);
 
@@ -732,6 +830,7 @@ function ObraFechamento({ perfil, obra }) {
     const un = onSnapshot(dref, (s) => {
       const d = s.data() || {};
       setFotosNuvem(d.fotos || []);
+      setFotosImprim(d.fotosImprimacao || []);
       if (!pronto.current) {
         setF({
           retorno: d.retorno || "", caminhoesRetorno: d.caminhoesRetorno || "",
@@ -849,6 +948,9 @@ function ObraFechamento({ perfil, obra }) {
           );
         })}
         <Btn tom="claro" onClick={() => addLinha("imprimacao", { trecho: "", p1: "", p2: "" })} style={{ padding: "10px" }}>+ Adicionar medição da bandeja</Btn>
+        <div style={{ height: 10 }} />
+        <BotaoFoto obraNome={obra.nome} docPath={dp} campo="fotosImprimacao" legenda="Imprimação (bandeja)" rotulo="📷 Fotos da bandeja" />
+        <Miniaturas fotos={fotosImprim} />
       </Cartao>
 
       <Cartao>
@@ -927,7 +1029,7 @@ function CoordPainel() {
       {transito.length > 0 && (
         <Cartao>
           <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>🚚 Em trânsito agora</div>
-          {transito.map((c) => <Linha key={c.id} k={`${c.placa} → ${c.obraNome}`} v={`saiu ${c.horaSaida} · ${c.tempSaida} °C · ${c.tonelagem} t`} />)}
+          {transito.map((c) => <Linha key={c.id} k={`${c.placa} → ${c.obraNome}`} v={`saiu ${c.horaSaida} · ${c.tempSaida} °C${c.tonelagem != null ? ` · ${c.tonelagem} t` : ""}`} />)}
         </Cartao>
       )}
 
@@ -962,6 +1064,7 @@ function CoordObras({ perfil }) {
   const [f, setF] = useState({ nome: "", contratante: "", local: "", espessuraProjeto: "", faixa: "", freqTon: "", freqCargas: "" });
   const [msg, setMsg] = useState("");
   const [resumo, setResumo] = useState(null);
+  const [aplic, setAplic] = useState(null);
   const m = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   const criar = () => {
@@ -977,6 +1080,13 @@ function CoordObras({ perfil }) {
   const concluir = async (o) => {
     if (!confirm(`Concluir a obra "${o.nome}"? Ela sai da lista dos técnicos e o resumo geral fica disponível.`)) return;
     await updateDoc(doc(db, "obras", o.id), { status: "concluida", dataConclusao: hojeISO() });
+  };
+  const abrirDados = async (o, alvo) => {
+    const [cs, fs] = await Promise.all([
+      getDocs(query(collection(db, "cargas"), where("obraId", "==", o.id))),
+      getDocs(query(collection(db, "fechamentos"), where("obraId", "==", o.id))),
+    ]);
+    alvo({ obra: o, cargas: cs.docs.map((d) => ({ id: d.id, ...d.data() })), fechs: fs.docs.map((d) => ({ id: d.id, ...d.data() })) });
   };
   const abrirResumo = async (o) => {
     const [cs, fs] = await Promise.all([
@@ -1019,6 +1129,7 @@ function CoordObras({ perfil }) {
           {o.espessuraProjeto && <Linha k="Projeto" v={`${o.espessuraProjeto} cm ${o.faixa ? `· ${o.faixa}` : ""}`} />}
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <Btn tom="claro" cheio={false} onClick={() => abrirResumo(o)} style={{ flex: 1, padding: "10px" }}>📄 Resumo geral</Btn>
+            <Btn cheio={false} onClick={() => abrirDados(o, setAplic)} style={{ flex: 1, padding: "10px" }}>📐 Relatório de aplicação</Btn>
             {o.status === "ativa"
               ? <Btn tom="red" cheio={false} onClick={() => concluir(o)} style={{ flex: 1, padding: "10px" }}>🏁 Concluir obra</Btn>
               : <Btn tom="claro" cheio={false} onClick={() => updateDoc(doc(db, "obras", o.id), { status: "ativa", dataConclusao: "" })} style={{ flex: 1, padding: "10px" }}>Reativar</Btn>}
@@ -1026,6 +1137,7 @@ function CoordObras({ perfil }) {
         </Cartao>
       ))}
       {resumo && <ResumoObra {...resumo} fechar={() => setResumo(null)} />}
+      {aplic && <RelatorioAplicacao {...aplic} fechar={() => setAplic(null)} />}
     </>
   );
 }
@@ -1450,7 +1562,7 @@ function BlocoVinculo({ v, setV, cargas }) {
 function FormTeor({ perfil, obra, usinaNome, cargas, projetos, aoFechar, existente }) {
   const eqs = useEquipamentos();
   const ensaiosDia = useEnsaiosDia(obra.id, hojeISO());
-  const [e, setE] = useState(existente || {
+  const [e, setE] = useState(existente || RASCUNHOS.teorDados || {
     jornada: "Diurna", metodo: METODOS_TEOR[0], projetoId: projetos.find((p) => p.status === "Aprovado")?.id || projetos[0]?.id || "",
     equipamentoId: "", amostra: "", massaInicial: "", massaAgregado: "", massaFiltro: "", obs: "",
     vinculo: { tipo: "lote" },
@@ -1459,9 +1571,11 @@ function FormTeor({ perfil, obra, usinaNome, cargas, projetos, aoFechar, existen
   const eq = eqs.find((x) => x.id === e.equipamentoId);
   const r = calcTeor(e.massaInicial, e.massaAgregado, e.massaFiltro, proj);
   const docPath = existente?.id ? `ensaios/${existente.id}` : null;
-  const [fotosLocais, setFotosLocais] = useState([]);
+  const [fotosLocais, setFotosLocais] = useState(() => (existente ? [] : RASCUNHOS.teorFotos || []));
   const [etapa, setEtapa] = useState("Identificação da amostra");
   const ETAPAS = ["Identificação da amostra","Pesagem inicial","Equipamento Rotarex","Processo de extração","Secagem","Agregado recuperado","Pesagem final","Resultado"];
+  useEffect(() => { if (!existente) RASCUNHOS.teorDados = e; }, [e]);
+  useEffect(() => { if (!existente) RASCUNHOS.teorFotos = fotosLocais; }, [fotosLocais]);
 
   const concluir = async () => {
     if (!proj) return alert("Selecione o projeto de mistura.");
@@ -1483,6 +1597,7 @@ function FormTeor({ perfil, obra, usinaNome, cargas, projetos, aoFechar, existen
     if (id) updateDoc(doc(db, "ensaios", id), dados).catch(() => {});
     else { const dref = doc(collection(db, "ensaios")); setDoc(dref, { ...dados, fotos: [] }).catch(() => {}); id = dref.id; }
     fotosLocais.forEach((f) => anexarFoto(`ensaios/${id}`, "fotos", f.foto, f.etapa));
+    delete RASCUNHOS.teorDados; delete RASCUNHOS.teorFotos;
     aoFechar();
   };
 
@@ -1548,16 +1663,18 @@ function FormGran({ perfil, obra, usinaNome, cargas, projetos, aoFechar, existen
   const eqs = useEquipamentos();
   const ensaiosDia = useEnsaiosDia(obra.id, hojeISO());
   const projIni = projetos.find((p) => p.id === existente?.projetoId) || projetos.find((p) => p.status === "Aprovado") || projetos[0];
-  const [e, setE] = useState(existente ? { ...existente, linhas: existente.dados.linhas } : {
+  const [e, setE] = useState(existente ? { ...existente, linhas: existente.dados.linhas } : RASCUNHOS.granDados || {
     jornada: "Diurna", projetoId: projIni?.id || "", equipamentoId: "", amostra: "",
     massaSeca: "", fundo: "", obs: "", vinculo: { tipo: "lote" },
     linhas: (projIni?.peneiras || FAIXAS_DNIT["Faixa C"].map(([nome, li, ls]) => ({ nome, projeto: "", limInf: li, limSup: ls, tol: tolPeneira(nome) }))).map((p) => ({ ...p, massa: "" })),
   });
   const proj = projetos.find((p) => p.id === e.projetoId);
   const eq = eqs.find((x) => x.id === e.equipamentoId);
-  const [fotosLocais, setFotosLocais] = useState([]);
+  const [fotosLocais, setFotosLocais] = useState(() => (existente ? [] : RASCUNHOS.granFotos || []));
   const [etapa, setEtapa] = useState("Identificação");
   const ETAPAS = ["Identificação","Amostra seca","Conjunto de peneiras","Peneiramento","Material retido","Pesagem","Resultado"];
+  useEffect(() => { if (!existente) RASCUNHOS.granDados = e; }, [e]);
+  useEffect(() => { if (!existente) RASCUNHOS.granFotos = fotosLocais; }, [fotosLocais]);
   const trocarProjeto = (id) => {
     const p = projetos.find((x) => x.id === id);
     setE({ ...e, projetoId: id, linhas: (p?.peneiras || e.linhas).map((pe) => ({ ...pe, massa: e.linhas.find((l) => l.nome === pe.nome)?.massa || "" })) });
@@ -1584,6 +1701,7 @@ function FormGran({ perfil, obra, usinaNome, cargas, projetos, aoFechar, existen
     if (id) updateDoc(doc(db, "ensaios", id), dados).catch(() => {});
     else { const dref = doc(collection(db, "ensaios")); setDoc(dref, { ...dados, fotos: [] }).catch(() => {}); id = dref.id; }
     fotosLocais.forEach((f) => anexarFoto(`ensaios/${id}`, "fotos", f.foto, f.etapa));
+    delete RASCUNHOS.granDados; delete RASCUNHOS.granFotos;
     aoFechar();
   };
   const inp = { width: 64, fontSize: 13.5, padding: "7px 8px", borderRadius: 8, border: `1.5px solid ${C.line}`, fontFamily: F.body };
@@ -1678,7 +1796,8 @@ function EnsaiosUsina({ perfil }) {
   const ensaios = useEnsaiosDia(ctx.obraId, hojeISO());
   const projetos = useProjetos(ctx.obraId);
   const [sub, setSub] = useState("ensaios");
-  const [form, setForm] = useState(null); // {tipo, existente}
+  const [form, setForm] = useState(() => RASCUNHOS.formEnsaios || null); // {tipo, existente}
+  useEffect(() => { RASCUNHOS.formEnsaios = form; }, [form]);
 
   const Seg = ({ id, rot }) => (
     <button onClick={() => { setSub(id); setForm(null); }} style={{ flex: 1, border: "none", cursor: "pointer", padding: "9px 6px", borderRadius: 10, fontFamily: F.body, fontWeight: 700, fontSize: 13, background: sub === id ? C.navy : "transparent", color: sub === id ? "#fff" : C.mut }}>{rot}</button>
@@ -1947,13 +2066,32 @@ function ResumoUsina({ perfil }) {
 // ----------------------------------------------------------------------------
 // Impressão (PDF via imprimir) — componentes de relatório
 // ----------------------------------------------------------------------------
-function Impressao({ children, fechar }) {
+const linkRel = (tipo, obraId, data) => `${location.origin}/?rel=${tipo}&obra=${obraId}${data ? `&data=${data}` : ""}`;
+
+const ehStandalone = () => (typeof window !== "undefined") &&
+  (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
+
+function Impressao({ children, fechar, link, estatico }) {
+  const standalone = ehStandalone();
+  if (estatico) {
+    return (
+      <div className="area-impressao" style={{ background: "#fff", minHeight: "100vh" }}>
+        <div className="nao-imprimir" style={{ background: C.blueBg, color: C.navy, fontSize: 13.5, fontWeight: 600, padding: "12px 16px", lineHeight: 1.5 }}>
+          📄 Para salvar em PDF: toque em <b>Compartilhar</b> (ícone ↑) → <b>Imprimir</b> → e depois em <b>Compartilhar</b> de novo para salvar ou enviar o PDF. No computador: <b>Ctrl+P</b>.
+        </div>
+        <div style={{ maxWidth: 780, margin: "0 auto", padding: "18px 20px 60px", fontFamily: F.body, color: C.ink }}>{children}</div>
+      </div>
+    );
+  }
   return (
     <div className="area-impressao" style={{ position: "fixed", inset: 0, background: "#fff", zIndex: 100, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
-      <div className="nao-imprimir" style={{ position: "sticky", top: 0, display: "flex", gap: 8, padding: 10, background: C.navy, zIndex: 5 }}>
-        <Btn tom="red" cheio={false} onClick={() => window.print()} style={{ flex: 1 }}>🖨️ Imprimir / salvar PDF</Btn>
-        <Btn tom="claro" cheio={false} onClick={fechar} style={{ flex: 1 }}>Fechar</Btn>
+      <div className="nao-imprimir" style={{ position: "sticky", top: 0, display: "flex", gap: 8, padding: 10, background: C.navy, zIndex: 5, flexWrap: "wrap" }}>
+        {standalone && link
+          ? <a href={link} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 160, textDecoration: "none", textAlign: "center", background: C.red, color: "#fff", fontFamily: F.body, fontWeight: 700, fontSize: 15, borderRadius: 12, padding: "13px 18px" }}>📤 Exportar / salvar PDF</a>
+          : <Btn tom="red" cheio={false} onClick={() => window.print()} style={{ flex: 1, minWidth: 160 }}>📤 Exportar / salvar PDF</Btn>}
+        <Btn tom="claro" cheio={false} onClick={fechar} style={{ padding: "13px 18px" }}>Fechar</Btn>
       </div>
+      {standalone && link && <div className="nao-imprimir" style={{ background: C.warnBg, color: C.amber, fontSize: 12.5, fontWeight: 600, padding: "9px 14px" }}>O iPhone só gera PDF fora do app instalado — o botão acima abre este relatório no navegador, onde o PDF é gerado.</div>}
       <div style={{ maxWidth: 780, margin: "0 auto", padding: "18px 20px 60px", fontFamily: F.body, color: C.ink }}>{children}</div>
     </div>
   );
@@ -2038,7 +2176,7 @@ function EnsaiosRel({ ensaios }) {
 // ----------------------------------------------------------------------------
 // Relatório diário da USINA (mantém e amplia o relatório do app atual)
 // ----------------------------------------------------------------------------
-function RelatorioUsina({ obra, dataRef, cargas, ensaios, projeto, analise, fechar }) {
+function RelatorioUsina({ obra, dataRef, cargas, ensaios, projeto, analise, fechar, estatico }) {
   const ton = cargas.reduce((s, c) => s + (c.tonelagem || 0), 0);
   const temps = cargas.map((c) => c.tempSaida).filter((v) => v != null);
   const retidas = cargas.filter((c) => c.conformeSaida === false);
@@ -2047,7 +2185,7 @@ function RelatorioUsina({ obra, dataRef, cargas, ensaios, projeto, analise, fech
   const verif = `${numero}·${cargas.length}C·${ensaios.length}E·${ton.toFixed(0)}T`;
   const historico = ensaios.flatMap((e) => (e.historico || []).map((h) => `${e.codigo} corrigido por ${h.por} em ${fmtBR(h.em?.slice(0, 10))}`));
   return (
-    <Impressao fechar={fechar}>
+    <Impressao fechar={fechar} link={linkRel("usina", obra?.id, dataRef)} estatico={estatico}>
       <CabecalhoRel titulo="RELATÓRIO DIÁRIO DA USINA" numero={numero} obra={obra} dataRef={dataRef} />
       <div style={secRel}>1 · Situação geral (por eixo)</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody>
@@ -2100,7 +2238,7 @@ function RelatorioUsina({ obra, dataRef, cargas, ensaios, projeto, analise, fech
 // ----------------------------------------------------------------------------
 // Relatório diário CONSOLIDADO (usina + transporte + pista + laboratório)
 // ----------------------------------------------------------------------------
-function RelatorioDiario({ obra, dataRef, cargas, fech, fechar }) {
+function RelatorioDiario({ obra, dataRef, cargas, fech, fechar, estatico }) {
   const [ensaios, setEnsaios] = useState([]);
   const [analise, setAnalise] = useState(null);
   useEffect(() => {
@@ -2117,7 +2255,7 @@ function RelatorioDiario({ obra, dataRef, cargas, fech, fechar }) {
   const numero = `RD-${dataRef.replace(/-/g, "")}-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 4).toUpperCase()}`;
   const ensGC = (fech?.ensaios || []).filter((r) => num(r.gc) != null);
   return (
-    <Impressao fechar={fechar}>
+    <Impressao fechar={fechar} link={linkRel("diario", obra?.id, dataRef)} estatico={estatico}>
       <CabecalhoRel titulo="RELATÓRIO DIÁRIO CONSOLIDADO" numero={numero} obra={obra} dataRef={dataRef} />
       <div style={secRel}>1 · Resumo executivo</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody><tr>
@@ -2186,7 +2324,7 @@ function RelatorioDiario({ obra, dataRef, cargas, fech, fechar }) {
       )}
       <FotosRel titulo="Registro fotográfico — usina" fotos={cargas.flatMap((c) => c.fotosUsina || [])} />
       <FotosRel titulo="Registro fotográfico — ensaios" fotos={ensaios.flatMap((e) => e.fotos || [])} />
-      <FotosRel titulo="Registro fotográfico — pista" fotos={[...cargas.flatMap((c) => [...(c.chegada?.fotos || []), ...(c.descarga?.fotos || [])]), ...(fech?.fotos || [])]} />
+      <FotosRel titulo="Registro fotográfico — pista" fotos={[...cargas.flatMap((c) => [...(c.chegada?.fotos || []), ...(c.descarga?.fotos || [])]), ...(fech?.fotos || []), ...(fech?.fotosImprimacao || [])]} />
       <div style={secRel}>Análise técnica</div>
       {!analise?.aprovadoPor && <div style={{ fontSize: 10.5, fontWeight: 800, color: C.amber, marginBottom: 4 }}>MINUTA — sujeita a revisão e aprovação do responsável técnico</div>}
       <div style={{ fontSize: 11.5, whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{analise?.texto || "Sem análise registrada para a data."}</div>
@@ -2205,7 +2343,7 @@ function RelatorioDiario({ obra, dataRef, cargas, fech, fechar }) {
 // ----------------------------------------------------------------------------
 // Resumo geral da OBRA (do início ao fim da execução)
 // ----------------------------------------------------------------------------
-function ResumoObra({ obra, cargas, fechs, fechar }) {
+function ResumoObra({ obra, cargas, fechs, fechar, estatico }) {
   const ord = [...cargas].sort((a, b) => (a.dataRef + a.horaSaida).localeCompare(b.dataRef + b.horaSaida));
   const dias = [...new Set(ord.map((c) => c.dataRef))].sort();
   const ton = ord.reduce((s, c) => s + (c.tonelagem || 0), 0);
@@ -2218,7 +2356,7 @@ function ResumoObra({ obra, cargas, fechs, fechar }) {
   const amostras = fechs.flatMap((f) => (f.amostras || []).filter((a) => a.ident || a.placa));
   const numero = `RG-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()}`;
   return (
-    <Impressao fechar={fechar}>
+    <Impressao fechar={fechar} link={linkRel("resumo", obra?.id)} estatico={estatico}>
       <CabecalhoRel titulo="RESUMO GERAL DA OBRA" numero={numero} obra={obra} dataRef={obra.dataConclusao || hojeISO()} />
       <div style={secRel}>1 · Síntese da execução</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody>
@@ -2273,6 +2411,12 @@ function ResumoObra({ obra, cargas, fechs, fechar }) {
 // RAIZ DO APP
 // ============================================================================
 export default function App() {
+  const linkRelatorio = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const p = new URLSearchParams(location.search);
+    const tipo = p.get("rel");
+    return tipo && p.get("obra") ? { tipo, obraId: p.get("obra"), data: p.get("data") || hojeISO() } : null;
+  }, []);
   const [user, setUser] = useState(undefined);
   const [perfil, setPerfil] = useState(null);
   const [aba, setAba] = useState("");
@@ -2307,6 +2451,7 @@ export default function App() {
   if (!perfil) return null;
   if (perfil.semPerfil) return <Aviso txt="Seu acesso ainda não tem perfil configurado. Peça ao coordenador para cadastrar você em Equipe." />;
   if (perfil.ativo === false) return <Aviso txt="Acesso desativado pela coordenação." sair />;
+  if (linkRelatorio) return <><EstiloGlobal /><RelatorioPorLink {...linkRelatorio} /></>;
 
   return (
     <>
@@ -2340,7 +2485,8 @@ const EstiloGlobal = () => (
     @media print {
       body * { visibility: hidden; }
       .area-impressao, .area-impressao * { visibility: visible; }
-      .area-impressao { position: absolute !important; inset: 0; overflow: visible !important; }
+      .area-impressao { position: static !important; inset: auto !important; overflow: visible !important; height: auto !important; }
+      html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
       .nao-imprimir { display: none !important; }
       @page { size: A4; margin: 12mm; }
     }
@@ -2413,7 +2559,7 @@ function PainelTV({ fechar }) {
           {transito.map((c) => (
             <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,.07)", color: "#fff", fontSize: "clamp(14px, 1.6vw, 18px)" }}>
               <span style={{ fontWeight: 800 }}>{c.placa} <span style={{ color: "#8E9AC6", fontWeight: 600 }}>→ {c.obraNome}</span></span>
-              <span style={{ color: "#AEB8E0", fontWeight: 700, whiteSpace: "nowrap" }}>{c.horaSaida} · {c.tempSaida}°C · {c.tonelagem} t</span>
+              <span style={{ color: "#AEB8E0", fontWeight: 700, whiteSpace: "nowrap" }}>{c.horaSaida} · {c.tempSaida}°C{c.tonelagem != null ? ` · ${c.tonelagem} t` : ""}</span>
             </div>
           ))}
         </Sec>
@@ -2486,7 +2632,7 @@ function ChartControle({ pontos, refs = [], titulo, unidade, w = 680, h = 250 })
   );
 }
 
-function CartaControle({ obra, fechar }) {
+function CartaControle({ obra, fechar, estatico }) {
   const [d, setD] = useState(null);
   useEffect(() => {
     (async () => {
@@ -2518,7 +2664,7 @@ function CartaControle({ obra, fechar }) {
   const dentroG = d.gcs.filter((g) => g.gc >= LIMITES.gcMin).length;
 
   return (
-    <Impressao fechar={fechar}>
+    <Impressao fechar={fechar} link={linkRel("carta", obra?.id)} estatico={estatico}>
       <CabecalhoRel titulo="CARTA DE CONTROLE ESTATÍSTICO" numero={`CC-${(obra.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()}`} obra={obra} dataRef={hojeISO()} />
 
       <div style={secRel}>1 · Teor de ligante — tendência do processo</div>
@@ -2568,7 +2714,7 @@ function calcImprim(r, cfg) {
   return { dif, taxa, alvo, tol, sit: Math.abs(taxa - alvo) <= tol ? "conforme" : "nao_conforme" };
 }
 
-function FormulariosCampo({ obra, dataRef, fechar }) {
+function FormulariosCampo({ obra, dataRef, fechar, estatico }) {
   const [d, setD] = useState(null);
   useEffect(() => {
     (async () => {
@@ -2589,7 +2735,7 @@ function FormulariosCampo({ obra, dataRef, fechar }) {
   const tecnicos = [...new Set(cargas.map((c) => c.descarga?.registradoPor || c.chegada?.registradoPor).filter(Boolean))];
   const celT = { ...tabTd, fontSize: 11.5 };
   return (
-    <Impressao fechar={fechar}>
+    <Impressao fechar={fechar} link={linkRel("campo", obra?.id, dataRef)} estatico={estatico}>
       <CabecalhoRel titulo="CONTROLE DE CAMPO" numero={`CB-${dataRef.replace(/-/g, "")}-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 4).toUpperCase()}`} obra={obra} dataRef={dataRef} />
 
       <div style={secRel}>Controle de CBUQ — aplicação na pista</div>
@@ -2633,6 +2779,7 @@ function FormulariosCampo({ obra, dataRef, fechar }) {
         </>
       )}
 
+      <FotosRel titulo="Registro fotográfico — imprimação (bandeja)" fotos={fech?.fotosImprimacao} />
       {fech?.obs && <><div style={secRel}>Observações</div><div style={{ fontSize: 11.5 }}>{fech.obs}</div></>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, marginTop: 44, breakInside: "avoid" }}>
         {[`Técnico de obra${tecnicos.length ? ` — ${tecnicos.join(" / ")}` : ""}`, "Fiscalização / contratante"].map((r) => (
@@ -2641,6 +2788,285 @@ function FormulariosCampo({ obra, dataRef, fechar }) {
       </div>
       <div style={{ fontSize: 9.5, color: C.mut, marginTop: 18, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
         Registros lançados em campo em tempo real pelo sistema Solocontrol, com autoria e horário auditáveis. Documento gerado em {fmtDataHora()}.
+      </div>
+    </Impressao>
+  );
+}
+
+// ============================================================================
+// Abertura de relatório por link (usado na exportação em PDF pelo navegador)
+// ============================================================================
+function RelatorioPorLink({ tipo, obraId, data }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const os = await getDoc(doc(db, "obras", obraId));
+        if (!os.exists()) return setD({ erro: "Obra não encontrada." });
+        const obra = { id: os.id, ...os.data() };
+        if (tipo === "carta") return setD({ obra });
+        if (tipo === "campo") return setD({ obra });
+        if (tipo === "resumo" || tipo === "aplicacao") {
+          const [cs, fs] = await Promise.all([
+            getDocs(query(collection(db, "cargas"), where("obraId", "==", obraId))),
+            getDocs(query(collection(db, "fechamentos"), where("obraId", "==", obraId))),
+          ]);
+          return setD({ obra, cargas: cs.docs.map((x) => ({ id: x.id, ...x.data() })), fechs: fs.docs.map((x) => ({ id: x.id, ...x.data() })) });
+        }
+        const [cs, fe, es, ps, an] = await Promise.all([
+          getDocs(query(collection(db, "cargas"), where("obraId", "==", obraId), where("dataRef", "==", data))),
+          getDoc(doc(db, "fechamentos", `${obraId}_${data}`)),
+          getDocs(query(collection(db, "ensaios"), where("obraId", "==", obraId), where("dataRef", "==", data))),
+          getDocs(collection(db, "projetos")),
+          getDoc(doc(db, "analises", `${obraId}_${data}`)),
+        ]);
+        const cargas = cs.docs.map((x) => ({ id: x.id, ...x.data() }));
+        cargas.sort((a, b) => (a.horaSaida || "").localeCompare(b.horaSaida || ""));
+        const ensaios = es.docs.map((x) => ({ id: x.id, ...x.data() }));
+        ensaios.sort((a, b) => (a.criadoEm || "").localeCompare(b.criadoEm || ""));
+        const projetos = ps.docs.map((x) => ({ id: x.id, ...x.data() })).filter((p) => !p.obraId || p.obraId === obraId);
+        setD({
+          obra, cargas, ensaios,
+          fech: fe.exists() ? fe.data() : null,
+          projeto: projetos.find((p) => p.status === "Aprovado") || projetos[0] || null,
+          analise: an.exists() ? an.data() : null,
+        });
+      } catch { setD({ erro: "Não foi possível carregar o relatório." }); }
+    })();
+  }, [tipo, obraId, data]);
+
+  if (!d) return <Aviso txt="Carregando relatório…" />;
+  if (d.erro) return <Aviso txt={d.erro} />;
+  const voltar = () => { window.location.href = location.origin; };
+  if (tipo === "carta") return <CartaControle obra={d.obra} fechar={voltar} estatico />;
+  if (tipo === "campo") return <FormulariosCampo obra={d.obra} dataRef={data} fechar={voltar} estatico />;
+  if (tipo === "aplicacao") return <RelatorioAplicacao obra={d.obra} cargas={d.cargas} fechs={d.fechs} fechar={voltar} estatico />;
+  if (tipo === "resumo") return <ResumoObra obra={d.obra} cargas={d.cargas} fechs={d.fechs} fechar={voltar} estatico />;
+  if (tipo === "usina") return <RelatorioUsina obra={d.obra} dataRef={data} cargas={d.cargas} ensaios={d.ensaios} projeto={d.projeto} analise={d.analise} fechar={voltar} estatico />;
+  return <RelatorioDiario obra={d.obra} dataRef={data} cargas={d.cargas} fech={d.fech} fechar={voltar} estatico />;
+}
+
+// ============================================================================
+// RELATÓRIO TÉCNICO DE APLICAÇÃO (obra/pista) — consolidado por trecho
+// ============================================================================
+const mediaDe = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+const desvioDe = (a) => {
+  if (a.length < 2) return null;
+  const m = mediaDe(a);
+  return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1));
+};
+
+function consolidarAplicacao(obra, cargas, fechs) {
+  const aplicadas = cargas.filter((c) => c.descarga?.fim);
+  const dias = [...new Set(cargas.map((c) => c.dataRef))].sort();
+  const ton = aplicadas.reduce((s, c) => s + (c.tonelagem || 0), 0);
+  const tApl = aplicadas.map((c) => c.descarga?.tempAplicacao).filter((v) => v != null);
+  const perdas = cargas.map((c) => c.transporte?.perda).filter((v) => v != null);
+  const transp = cargas.map((c) => c.transporte?.minutos).filter((v) => v != null);
+  const descarga = aplicadas.map((c) => minutosEntre(c.descarga?.inicio, c.descarga?.fim)).filter((v) => v != null);
+  const espera = cargas.map((c) => minutosEntre(c.chegada?.hora, c.descarga?.inicio)).filter((v) => v != null && v >= 0);
+  const gcs = fechs.flatMap((f) => (f.ensaios || []).map((r) => num(r.gc)).filter((v) => v != null));
+  const espCamp = fechs.flatMap((f) => (f.ensaios || []).map((r) => num(r.esp)).filter((v) => v != null));
+  const espSolta = aplicadas.map((c) => num(c.descarga?.espessura)).filter((v) => v != null);
+  const imprim = fechs.flatMap((f) => (f.imprimacao || []).map((r) => calcImprim(r, f.imprimCfg)).filter(Boolean));
+  const frias = aplicadas.filter((c) => c.descarga?.tempAplicacao != null && c.descarga.tempAplicacao < LIMITES.tempAplicMin);
+  const gcBaixo = gcs.filter((v) => v < LIMITES.gcMin);
+
+  // Agrupamento por trecho aplicado
+  const trechos = {};
+  aplicadas.forEach((c) => {
+    const k = (c.descarga?.trecho || "Não informado").trim();
+    (trechos[k] ||= { nome: k, cargas: 0, ton: 0, temps: [], esp: [], dias: new Set() });
+    trechos[k].cargas++;
+    trechos[k].ton += c.tonelagem || 0;
+    if (c.descarga?.tempAplicacao != null) trechos[k].temps.push(c.descarga.tempAplicacao);
+    const e = num(c.descarga?.espessura); if (e != null) trechos[k].esp.push(e);
+    trechos[k].dias.add(c.dataRef);
+  });
+
+  return {
+    dias, aplicadas, ton, tApl, perdas, transp, descarga, espera, gcs, espCamp, espSolta, imprim, frias, gcBaixo,
+    trechos: Object.values(trechos).sort((a, b) => b.ton - a.ton),
+    tonDia: dias.length ? ton / dias.length : null,
+  };
+}
+
+function gerarAnaliseAplicacao(obra, d) {
+  const p = [];
+  const espProj = num(obra?.espessuraProjeto);
+  p.push(`A obra ${obra?.nome || ""} registrou aplicação de ${d.ton.toFixed(1)} t de concreto asfáltico em ${d.aplicadas.length} carga(s), distribuídas em ${d.dias.length} dia(s) de execução${d.dias.length ? ` (${fmtBR(d.dias[0])} a ${fmtBR(d.dias[d.dias.length - 1])})` : ""}, com média de ${d.tonDia ? d.tonDia.toFixed(1) : "—"} t por dia de aplicação.`);
+
+  if (d.tApl.length) {
+    p.push(`Temperatura de aplicação: mínima ${Math.min(...d.tApl)} °C, média ${mediaDe(d.tApl).toFixed(1)} °C e máxima ${Math.max(...d.tApl)} °C, para o critério mínimo de ${LIMITES.tempAplicMin} °C. ${d.frias.length ? `${d.frias.length} carga(s) foram registradas abaixo do mínimo: ${d.frias.map((c) => `${c.placa} (${c.descarga.tempAplicacao} °C, ${c.descarga.trecho || "trecho não informado"})`).join("; ")}.` : "Nenhuma carga foi aplicada abaixo do limite registrado."}`);
+  } else p.push("Não há temperaturas de aplicação registradas no período.");
+
+  if (d.perdas.length) {
+    const acima = d.perdas.filter((v) => v > LIMITES.perdaAlerta).length;
+    p.push(`Ciclo logístico: tempo médio entre usina e obra de ${fmtMin(Math.round(mediaDe(d.transp)))}${d.espera.length ? `, espera média para início da descarga de ${fmtMin(Math.round(mediaDe(d.espera)))}` : ""}${d.descarga.length ? ` e duração média de descarga de ${fmtMin(Math.round(mediaDe(d.descarga)))}` : ""}. A perda térmica média no transporte foi de ${mediaDe(d.perdas).toFixed(1)} °C (máxima ${Math.max(...d.perdas)} °C)${acima ? `, com ${acima} ocorrência(s) acima do parâmetro de alerta de ${LIMITES.perdaAlerta} °C` : ""}.`);
+  }
+
+  if (d.gcs.length) {
+    const m = mediaDe(d.gcs), s = desvioDe(d.gcs);
+    p.push(`Compactação: foram executadas ${d.gcs.length} determinação(ões) de grau de compactação, com média de ${m.toFixed(1)}%, mínimo de ${Math.min(...d.gcs).toFixed(1)}% e máximo de ${Math.max(...d.gcs).toFixed(1)}%${s != null ? `, desvio-padrão de ${s.toFixed(2)}%` : ""}, para o critério mínimo de ${LIMITES.gcMin}%. ${d.gcBaixo.length ? `${d.gcBaixo.length} determinação(ões) ficaram abaixo do mínimo.` : `Todas as determinações atenderam ao critério (${d.gcs.length}/${d.gcs.length}).`}`);
+  } else p.push("Não há determinações de grau de compactação registradas no período.");
+
+  if (d.espCamp.length || d.espSolta.length) {
+    const partes = [];
+    if (d.espCamp.length) partes.push(`espessura medida em campo com média de ${mediaDe(d.espCamp).toFixed(2)} cm (mín. ${Math.min(...d.espCamp)} cm, máx. ${Math.max(...d.espCamp)} cm) em ${d.espCamp.length} ponto(s)`);
+    if (d.espSolta.length) partes.push(`espessura solta conferida no gabarito com média de ${mediaDe(d.espSolta).toFixed(2)} cm`);
+    p.push(`Espessura: ${partes.join("; ")}${espProj != null ? `, para espessura de projeto de ${espProj} cm` : ""}.`);
+  }
+
+  if (d.imprim.length) {
+    const taxas = d.imprim.map((x) => x.taxa);
+    const nc = d.imprim.filter((x) => x.sit !== "conforme").length;
+    p.push(`Imprimação/pintura de ligação: ${d.imprim.length} determinação(ões) pelo método da bandeja, taxa média de ${mediaDe(taxas).toFixed(2)} l/m² (mín. ${Math.min(...taxas).toFixed(2)}, máx. ${Math.max(...taxas).toFixed(2)}) para taxa de projeto de ${d.imprim[0].alvo} ± ${d.imprim[0].tol} l/m². ${nc ? `${nc} determinação(ões) fora da tolerância.` : "Todas dentro da tolerância."}`);
+  }
+
+  if (d.trechos.length) {
+    p.push(`Distribuição por trecho: ${d.trechos.map((t) => `${t.nome} — ${t.ton.toFixed(1)} t em ${t.cargas} carga(s)`).join("; ")}.`);
+  }
+
+  p.push("Os valores acima correspondem exclusivamente aos dados medidos e registrados em campo pelo sistema, com autoria e horário auditáveis. Critério adotado conforme projeto e especificação contratual cadastrados.");
+  p.push("Minuta de análise técnica de aplicação gerada automaticamente a partir dos registros. Sujeita a revisão, edição e aprovação do responsável técnico.");
+  return p.join("\n\n");
+}
+
+function eixosAplicacao(obra, d) {
+  const espProj = num(obra?.espessuraProjeto);
+  const espOk = d.espCamp.length && espProj != null ? d.espCamp.every((v) => Math.abs(v - espProj) <= espProj * 0.1) : null;
+  return [
+    ["Temperatura de aplicação", d.tApl.length ? (d.frias.length ? "nao_conforme" : "conforme") : "pendente"],
+    ["Perda térmica no transporte", d.perdas.length ? (d.perdas.filter((v) => v > LIMITES.perdaAlerta).length ? "atencao" : "conforme") : "pendente"],
+    ["Grau de compactação", d.gcs.length ? (d.gcBaixo.length ? "nao_conforme" : "conforme") : "pendente"],
+    ["Espessura da camada", d.espCamp.length ? (espOk === null ? "atencao" : espOk ? "conforme" : "atencao") : "pendente"],
+    ["Imprimação / pintura de ligação", d.imprim.length ? (d.imprim.some((x) => x.sit !== "conforme") ? "nao_conforme" : "conforme") : "pendente"],
+    ["Completude dos registros de pista", d.aplicadas.length && d.gcs.length ? "conforme" : "pendente"],
+  ];
+}
+
+function RelatorioAplicacao({ obra, cargas, fechs, fechar, estatico }) {
+  const d = useMemo(() => consolidarAplicacao(obra, cargas, fechs), [obra?.id, cargas.length, fechs.length]);
+  const [texto, setTexto] = useState("");
+  useEffect(() => { setTexto(gerarAnaliseAplicacao(obra, d)); }, [obra?.id, d]);
+  const espProj = num(obra?.espessuraProjeto);
+  const eixos = eixosAplicacao(obra, d);
+  const numero = `RA-${(obra?.nome || "OB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase()}`;
+
+  return (
+    <Impressao fechar={fechar} link={linkRel("aplicacao", obra?.id)} estatico={estatico}>
+      <CabecalhoRel titulo="RELATÓRIO TÉCNICO DE APLICAÇÃO" numero={numero} obra={obra} dataRef={obra?.dataConclusao || hojeISO()} />
+
+      <div style={secRel}>1 · Situação por eixo (execução na pista)</div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody>
+        {eixos.map(([nome, s]) => (
+          <tr key={nome}><td style={tabTd}>{nome}</td>
+            <td style={{ ...tabTd, textAlign: "right", fontWeight: 800, color: s !== "pendente" ? SIT[s].cor : C.mut }}>{s !== "pendente" ? SIT[s].rot.toUpperCase() : "PENDENTE"}</td></tr>
+        ))}
+      </tbody></table>
+
+      <div style={secRel}>2 · Produção aplicada</div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody>
+        <tr>
+          <td style={tabTd}><b>Período:</b> {d.dias.length ? `${fmtBR(d.dias[0])} → ${fmtBR(d.dias[d.dias.length - 1])}` : "—"}</td>
+          <td style={tabTd}><b>Dias de aplicação:</b> {d.dias.length}</td>
+          <td style={tabTd}><b>Massa aplicada:</b> {d.ton.toFixed(1)} t</td>
+          <td style={tabTd}><b>Cargas aplicadas:</b> {d.aplicadas.length}</td>
+          <td style={tabTd}><b>Média por dia:</b> {d.tonDia ? `${d.tonDia.toFixed(1)} t` : "—"}</td>
+        </tr>
+        <tr>
+          <td style={tabTd}><b>Temp. aplicação (mín/méd/máx):</b> {d.tApl.length ? `${Math.min(...d.tApl)} / ${mediaDe(d.tApl).toFixed(1)} / ${Math.max(...d.tApl)} °C` : "—"}</td>
+          <td style={tabTd}><b>Usina → obra:</b> {d.transp.length ? fmtMin(Math.round(mediaDe(d.transp))) : "—"}</td>
+          <td style={tabTd}><b>Espera p/ descarga:</b> {d.espera.length ? fmtMin(Math.round(mediaDe(d.espera))) : "—"}</td>
+          <td style={tabTd}><b>Duração da descarga:</b> {d.descarga.length ? fmtMin(Math.round(mediaDe(d.descarga))) : "—"}</td>
+          <td style={tabTd}><b>Perda térmica média:</b> {d.perdas.length ? `${mediaDe(d.perdas).toFixed(1)} °C` : "—"}</td>
+        </tr>
+      </tbody></table>
+
+      <div style={secRel}>3 · Desempenho por trecho aplicado</div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr>{["Trecho / estaca", "Cargas", "Massa (t)", "Dias", "Temp. média aplicação", "Esp. solta média (cm)"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
+        <tbody>{d.trechos.map((t) => (
+          <tr key={t.nome}>
+            <td style={tabTd}><b>{t.nome}</b></td>
+            <td style={tabTd}>{t.cargas}</td>
+            <td style={tabTd}>{t.ton.toFixed(1)}</td>
+            <td style={tabTd}>{t.dias.size}</td>
+            <td style={{ ...tabTd, fontWeight: 700, color: t.temps.length && mediaDe(t.temps) < LIMITES.tempAplicMin ? C.red : C.ink }}>{t.temps.length ? `${mediaDe(t.temps).toFixed(1)} °C` : "—"}</td>
+            <td style={tabTd}>{t.esp.length ? mediaDe(t.esp).toFixed(2) : "—"}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+
+      <div style={secRel}>4 · Controle de compactação e espessura</div>
+      <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}><tbody>
+        <tr>
+          <td style={tabTd}><b>Determinações de GC:</b> {d.gcs.length}</td>
+          <td style={tabTd}><b>GC médio:</b> {d.gcs.length ? `${mediaDe(d.gcs).toFixed(1)}%` : "—"}</td>
+          <td style={tabTd}><b>GC mínimo:</b> {d.gcs.length ? `${Math.min(...d.gcs).toFixed(1)}%` : "—"}</td>
+          <td style={tabTd}><b>Desvio-padrão:</b> {desvioDe(d.gcs) != null ? `${desvioDe(d.gcs).toFixed(2)}%` : "—"}</td>
+          <td style={{ ...tabTd, fontWeight: 800, color: d.gcBaixo.length ? C.red : C.ok }}><b>≥ {LIMITES.gcMin}%:</b> {d.gcs.length ? `${d.gcs.length - d.gcBaixo.length}/${d.gcs.length}` : "—"}</td>
+        </tr>
+        <tr>
+          <td style={tabTd}><b>Espessura de projeto:</b> {espProj != null ? `${espProj} cm` : "—"}</td>
+          <td style={tabTd}><b>Esp. medida (média):</b> {d.espCamp.length ? `${mediaDe(d.espCamp).toFixed(2)} cm` : "—"}</td>
+          <td style={tabTd}><b>Esp. mín/máx:</b> {d.espCamp.length ? `${Math.min(...d.espCamp)} / ${Math.max(...d.espCamp)} cm` : "—"}</td>
+          <td style={tabTd}><b>Esp. solta média:</b> {d.espSolta.length ? `${mediaDe(d.espSolta).toFixed(2)} cm` : "—"}</td>
+          <td style={tabTd}><b>Pontos medidos:</b> {d.espCamp.length}</td>
+        </tr>
+      </tbody></table>
+      {d.gcs.length > 0 && (
+        <ChartControle titulo={`Grau de compactação por determinação (mínimo ${LIMITES.gcMin}%)`}
+          pontos={fechs.flatMap((f) => (f.ensaios || []).filter((r) => num(r.gc) != null).map((r) => ({ y: num(r.gc), rot: `${f.dataRef.slice(8, 10)}/${f.dataRef.slice(5, 7)}`, fora: num(r.gc) < LIMITES.gcMin })))}
+          refs={[{ v: LIMITES.gcMin, cor: C.red, rot: `Mínimo ${LIMITES.gcMin}%` }]} />
+      )}
+
+      {d.imprim.length > 0 && (
+        <>
+          <div style={secRel}>5 · Imprimação / pintura de ligação (bandeja)</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}><tbody><tr>
+            <td style={tabTd}><b>Determinações:</b> {d.imprim.length}</td>
+            <td style={tabTd}><b>Taxa média:</b> {mediaDe(d.imprim.map((x) => x.taxa)).toFixed(2)} l/m²</td>
+            <td style={tabTd}><b>Taxa de projeto:</b> {d.imprim[0].alvo} ± {d.imprim[0].tol} l/m²</td>
+            <td style={{ ...tabTd, fontWeight: 800, color: d.imprim.some((x) => x.sit !== "conforme") ? C.red : C.ok }}><b>Conformes:</b> {d.imprim.filter((x) => x.sit === "conforme").length}/{d.imprim.length}</td>
+          </tr></tbody></table>
+        </>
+      )}
+
+      {(d.frias.length > 0 || d.gcBaixo.length > 0) && (
+        <>
+          <div style={secRel}>Não conformidades registradas</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Tipo", "Identificação", "Valor medido", "Critério"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
+            <tbody>
+              {d.frias.map((c) => (
+                <tr key={c.id}><td style={tabTd}>Temperatura de aplicação</td><td style={tabTd}>{c.placa} · {fmtBR(c.dataRef)} · {c.descarga?.trecho || "—"}</td>
+                  <td style={{ ...tabTd, color: C.red, fontWeight: 800 }}>{c.descarga?.tempAplicacao} °C</td><td style={tabTd}>≥ {LIMITES.tempAplicMin} °C</td></tr>
+              ))}
+              {fechs.flatMap((f) => (f.ensaios || []).filter((r) => num(r.gc) != null && num(r.gc) < LIMITES.gcMin).map((r, i) => (
+                <tr key={`${f.dataRef}-${i}`}><td style={tabTd}>Grau de compactação</td><td style={tabTd}>{r.estaca || "—"} · {fmtBR(f.dataRef)}</td>
+                  <td style={{ ...tabTd, color: C.red, fontWeight: 800 }}>{r.gc}%</td><td style={tabTd}>≥ {LIMITES.gcMin}%</td></tr>
+              )))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <div style={secRel}>Análise técnica de aplicação</div>
+      <div className="nao-imprimir" style={{ marginBottom: 8 }}>
+        <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={10}
+          style={{ width: "100%", boxSizing: "border-box", fontFamily: F.body, fontSize: 13.5, padding: 11, borderRadius: 11, border: `1.5px solid ${C.line}`, resize: "vertical" }} />
+        <div style={{ fontSize: 12, color: C.mut, marginTop: 4 }}>Revise e edite o texto antes de exportar — ele é gerado apenas a partir dos dados registrados.</div>
+      </div>
+      <div style={{ fontSize: 11.5, whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{texto}</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, marginTop: 44, breakInside: "avoid" }}>
+        {["Responsável técnico — pista", "Coordenação Solocontrol"].map((r) => (
+          <div key={r} style={{ textAlign: "center" }}><div style={{ borderTop: `1.5px solid ${C.ink}`, paddingTop: 5, fontSize: 11 }}>{r}</div></div>
+        ))}
+      </div>
+      <div style={{ fontSize: 9.5, color: C.mut, marginTop: 18, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
+        Documento gerado pelo sistema Solocontrol em {fmtDataHora()} · Nº {numero} · Consolida {cargas.length} carga(s) e {fechs.length} fechamento(s) diário(s) com registros auditáveis.
       </div>
     </Impressao>
   );
