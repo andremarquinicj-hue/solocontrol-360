@@ -34,6 +34,10 @@ service cloud.firestore {
       allow read, create, update: if logado();
       allow delete: if coordenador();
     }
+    match /documentos/{id} {
+      allow read, create, update: if logado();
+      allow delete: if coordenador() || resource.data.uid == request.auth.uid;
+    }
     match /analises/{id} {
       allow read, create, update: if logado();
       allow delete: if coordenador();
