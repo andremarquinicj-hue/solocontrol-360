@@ -17,6 +17,7 @@ import {
   query, where, getDoc, getDocs, arrayUnion,
 } from "firebase/firestore";
 import { ref as sRef, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
+import { TelaPonto, CoordPessoal } from "./Pessoal.jsx";
 
 // ----------------------------------------------------------------------------
 // Parâmetros técnicos (DNIT 031/2006-ES — confirmar sempre com o projeto)
@@ -2593,9 +2594,12 @@ export default function App() {
 
   const abas = useMemo(() => {
     if (!perfil) return [];
+    const pt = perfil.ponto ? [{ id: "ponto", ico: "🕐", rot: "Ponto" }] : [];
+    if (perfil.papel === "funcionario") return [{ id: "ponto", ico: "🕐", rot: "Meu ponto" }];
     if (perfil.papel === "coordenador") return [
       { id: "painel", ico: "📊", rot: "Painel" }, { id: "obras", ico: "🏗️", rot: "Obras" },
-      { id: "equipe", ico: "👥", rot: "Equipe" }, { id: "relatorios", ico: "📄", rot: "Relatórios" }];
+      { id: "equipe", ico: "👥", rot: "Equipe" }, { id: "pessoal", ico: "🪪", rot: "Pessoal" },
+      { id: "relatorios", ico: "📄", rot: "Relatórios" }];
     if (perfil.papel === "usina") return [
       { id: "nova", ico: "➕", rot: "Nova carga" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }];
@@ -2604,8 +2608,8 @@ export default function App() {
       { id: "nova", ico: "➕", rot: "Nova" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" },
       { id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar" }];
-    return [{ id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar dia" }];
-  }, [perfil?.papel]);
+    return [{ id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar dia" }, ...pt];
+  }, [perfil?.papel, perfil?.ponto]);
   useEffect(() => { if (abas.length && !abas.find((a) => a.id === aba)) setAba(abas[0].id); }, [abas]);
 
   if (user === undefined) return null;
@@ -2618,8 +2622,10 @@ export default function App() {
   return (
     <>
       <EstiloGlobal />
-      <Shell perfil={perfil} abas={abas} aba={aba} setAba={setAba}>
-        {perfil.papel === "coordenador" && <TelaCoordenador perfil={perfil} aba={aba} />}
+     <Shell perfil={perfil} abas={abas} aba={aba} setAba={setAba}>
+          {aba === "ponto" && <TelaPonto perfil={perfil} />}
+          {aba === "pessoal" && perfil.papel === "coordenador" && <CoordPessoal perfil={perfil} />}
+          {perfil.papel === "coordenador" && !["pessoal", "ponto"].includes(aba) && <TelaCoordenador perfil={perfil} aba={aba} />}
         {(perfil.papel === "usina" || perfil.papel === "ambos") && ["nova", "dia", "ensaios", "resumo"].includes(aba) && (
           aba === "nova" ? <UsinaNovaCarga perfil={perfil} /> :
           aba === "dia" ? <UsinaCargasDia perfil={perfil} /> :
