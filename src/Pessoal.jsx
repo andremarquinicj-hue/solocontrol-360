@@ -36,7 +36,7 @@ import { getAuth, createUserWithEmailAndPassword, signOut } from "firebase/auth"
 import { initializeApp, getApps } from "firebase/app";
 import {
   collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot,
-  query, where, getDocs, arrayUnion, increment,
+  query, where, getDocs, arrayUnion,
 } from "firebase/firestore";
 
 // ============================================================================
@@ -277,9 +277,12 @@ const CFG_PADRAO = {
     toleranciaMarcacaoMin: 5,    // CLT art. 58 §1º
     toleranciaDiaMin: 10,        // CLT art. 58 §1º
     modoTolerancia: "sumula366", // "sumula366" (correto) | "excedente"
-    pctNormal: 70,               // hora extra em dia útil
-    pctFimSemana: 110,           // sábado/domingo não previstos na escala
-    pctFeriado: 110,
+    // Horas extras escalonadas — padrão CCT SEAAC Araraquara.
+    // CONFIRA sempre no PDF oficial da convenção vigente antes de usar em folha.
+    pctExtra1: 60,               // 2 primeiras horas extras do dia útil
+    pctExtra2: 80,               // demais horas extras do dia útil
+    limiteExtra1Min: 120,        // fim da 1ª faixa (2 h = 120 min)
+    pctEspecial: 100,            // domingo, feriado ou dia já compensado (Súm. 146 do TST)
     adicNoturno: 20,             // CLT art. 73
     horaNoturnaReduzida: true,   // hora noturna = 52min30s
     horasMes: 220,               // divisor para valor-hora (44h semanais)
@@ -291,7 +294,8 @@ const CFG_PADRAO = {
 };
 
 // Jornada padrão: 44h semanais com sábado compensado (8h48 de segunda a sexta).
-// Assim, trabalho em sábado/domingo cai automaticamente no adicional de fim de semana.
+// Assim, trabalho em sábado (dia compensado), domingo ou feriado cai no adicional
+// de 100% (pctEspecial). Ajuste dia a dia na ficha se a escala real for outra.
 const REGIME_PADRAO = {
   dias: { seg: 528, ter: 528, qua: 528, qui: 528, sex: 528, sab: 0, dom: 0 },
   intervaloMin: 60,
@@ -424,22 +428,31 @@ export function calcularDia({ dataRef, marcacoes = [], regime, cfg, feriado, afa
   let intervalo = 0;
   for (let i = 1; i < pares.length; i++) intervalo += pares[i][0] - pares[i - 1][1];
 
-  let extraNormal = 0, extraEspecial = 0, debito = 0, tolerado = 0;
-  const pctEspecial = feriado ? p.pctFeriado : p.pctFimSemana;
+  // Faixas de hora extra:
+  //  - dia útil (prevista > 0): 1ª faixa (até limiteExtra1Min) a pctExtra1,
+  //    excedente a pctExtra2;
+  //  - dia sem jornada prevista (sábado compensado, domingo, feriado): tudo a pctEspecial.
+  let extra1 = 0, extra2 = 0, extraEspecial = 0, debito = 0, tolerado = 0;
 
   if (prevista > 0) {
     const saldo = trabalhado - prevista;
     if (saldo > 0) {
       if (saldo <= p.toleranciaDiaMin) tolerado = saldo;
-      else extraNormal = p.modoTolerancia === "excedente" ? saldo - p.toleranciaDiaMin : saldo;
+      else {
+        const excedente = p.modoTolerancia === "excedente" ? saldo - p.toleranciaDiaMin : saldo;
+        const lim = p.limiteExtra1Min ?? 120;
+        extra1 = Math.min(excedente, lim);
+        extra2 = Math.max(0, excedente - lim);
+      }
     } else if (saldo < 0) {
       const atraso = -saldo;
       if (atraso <= p.toleranciaDiaMin) tolerado = -atraso;
       else debito = p.modoTolerancia === "excedente" ? atraso - p.toleranciaDiaMin : atraso;
     }
   } else if (trabalhado > 0) {
-    extraEspecial = trabalhado;
+    extraEspecial = trabalhado; // 100% — domingo/feriado/dia compensado
   }
+  const extraNormal = extra1 + extra2; // soma das faixas de dia útil (compatibilidade)
 
   const avisos = [];
   if (impar) avisos.push("Marcação ímpar — falta registrar a saída.");
@@ -455,7 +468,7 @@ export function calcularDia({ dataRef, marcacoes = [], regime, cfg, feriado, afa
   return {
     dataRef, chave, feriado: !!feriado, afastamento: afastamento || "",
     prevista, trabalhado, intervalo, noturno, pares, marcacoes: ms, impar,
-    extraNormal, extraEspecial, pctEspecial, debito, tolerado, avisos,
+    extra1, extra2, extraNormal, extraEspecial, debito, tolerado, avisos,
     saldo: trabalhado - prevista,
   };
 }
@@ -478,6 +491,7 @@ export function calcularMes({ ym, dias, func, cfg }) {
   const soma = (k) => linhas.reduce((s, l) => s + (l[k] || 0), 0);
   const t = {
     previsto: soma("prevista"), trabalhado: soma("trabalhado"), noturno: soma("noturno"),
+    extra1: soma("extra1"), extra2: soma("extra2"),
     extraNormal: soma("extraNormal"), extraEspecial: soma("extraEspecial"), debito: soma("debito"),
     diasComRegistro: linhas.filter((l) => l.marcacoes.length).length,
     diasUteis: linhas.filter((l) => l.prevista > 0).length,
@@ -488,7 +502,7 @@ export function calcularMes({ ym, dias, func, cfg }) {
   t.saldo = t.trabalhado - t.previsto;
 
   // Reflexo do DSR sobre horas extras (Súmula 172 do TST) — informativo
-  const extrasTot = t.extraNormal + t.extraEspecial;
+  const extrasTot = t.extra1 + t.extra2 + t.extraEspecial;
   t.dsr = t.diasUteis > 0 ? (extrasTot / t.diasUteis) * t.diasDescanso : 0;
 
   // Estimativa de valores — CONFERÊNCIA apenas; a folha é do escritório contábil
@@ -496,11 +510,16 @@ export function calcularMes({ ym, dias, func, cfg }) {
   if (salario != null && salario > 0) {
     const vh = salario / (p.horasMes || 220);
     t.valorHora = vh;
-    t.vlExtraNormal = (t.extraNormal / 60) * vh * (1 + p.pctNormal / 100);
-    t.vlExtraEspecial = (t.extraEspecial / 60) * vh * (1 + p.pctFimSemana / 100);
+    t.vlExtra1 = (t.extra1 / 60) * vh * (1 + p.pctExtra1 / 100);
+    t.vlExtra2 = (t.extra2 / 60) * vh * (1 + p.pctExtra2 / 100);
+    t.vlExtraEspecial = (t.extraEspecial / 60) * vh * (1 + p.pctEspecial / 100);
     t.vlNoturno = (t.noturno / 60) * vh * (p.adicNoturno / 100);
-    t.vlDsr = (t.dsr / 60) * vh * (1 + p.pctNormal / 100);
-    t.vlTotal = t.vlExtraNormal + t.vlExtraEspecial + t.vlNoturno + t.vlDsr;
+    // Reflexo do DSR estimado pelo adicional médio das extras do mês
+    const pctMedio = extrasTot > 0
+      ? (t.extra1 * p.pctExtra1 + t.extra2 * p.pctExtra2 + t.extraEspecial * p.pctEspecial) / extrasTot
+      : p.pctExtra1;
+    t.vlDsr = (t.dsr / 60) * vh * (1 + pctMedio / 100);
+    t.vlTotal = t.vlExtra1 + t.vlExtra2 + t.vlExtraEspecial + t.vlNoturno + t.vlDsr;
   }
   return { linhas, t };
 }
@@ -594,12 +613,25 @@ export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
 // ----------------------------------------------------------------------------
 // Gravação da marcação — APPEND-ONLY, nunca sobrescreve nem apaga
 // ----------------------------------------------------------------------------
+// O NSR (número sequencial) precisa ser único e crescente por empregado, mesmo
+// que a pessoa toque no botão várias vezes em segundos. O contador da ficha
+// (func.nsr) chega pela nuvem com atraso e o increment() é assíncrono — então
+// calculamos o NSR de forma SÍNCRONA, antes de qualquer await, combinando o
+// contador da nuvem com um contador de sessão em memória. Assim dois toques
+// rápidos recebem números diferentes, e funciona também offline.
+let _nsrSessao = 0;
 async function registrarMarcacao({ perfil, func, tipo }) {
+  // ↓ tudo isto roda de forma síncrona, antes de qualquer await:
+  const base = Math.max(func?.nsr || 0, _nsrSessao);
+  const nsr = base + 1;
+  _nsrSessao = nsr;
+  const hora = agoraHM(), em = agoraISO();
   const dataRef = hojeISO();
-  const nsr = (func?.nsr || 0) + 1;
+  // ↓ só agora um await (GPS), com o NSR já reservado:
+  const utm = (await pegarGPS()) || "";
   const marca = {
-    nsr, tipo, hora: agoraHM(), em: agoraISO(),
-    utm: (await pegarGPS()) || "", origem: "PWA Solocontrol 360",
+    nsr, tipo, hora, em, utm,
+    origem: "PWA Solocontrol 360",
     disp: (navigator.userAgent || "").slice(0, 90),
   };
   setDoc(doc(db, "ponto", `${perfil.uid}_${dataRef}`), {
@@ -607,7 +639,8 @@ async function registrarMarcacao({ perfil, func, tipo }) {
     matricula: func?.matricula || "", cpf: func?.cpf || "",
     marcacoes: arrayUnion(marca), atualizadoEm: agoraISO(),
   }, { merge: true }).catch(() => {});
-  updateDoc(doc(db, "funcionarios", perfil.uid), { nsr: increment(1), ultimaMarcacao: marca.em }).catch(() => {});
+  // grava o NSR efetivamente usado (não increment, para bater com o exibido)
+  updateDoc(doc(db, "funcionarios", perfil.uid), { nsr, ultimaMarcacao: em }).catch(() => {});
   return marca;
 }
 
@@ -841,8 +874,9 @@ function MeuEspelho({ perfil, func, cfg, ym, setYm, mes }) {
         <Linha k="Dias com registro" v={`${t.diasComRegistro} de ${t.diasUteis} dia(s) úteis`} />
         <Linha k="Horas trabalhadas" v={hhmm(t.trabalhado)} forte />
         <Linha k="Jornada prevista" v={hhmm(t.previsto)} />
-        <Linha k={`Extras dia útil (${cfg.ponto.pctNormal}%)`} v={hhmm(t.extraNormal)} forte />
-        <Linha k={`Extras fim de semana/feriado (${cfg.ponto.pctFimSemana}%)`} v={hhmm(t.extraEspecial)} forte />
+        <Linha k={`Extras 60% — 2 primeiras h/dia (${cfg.ponto.pctExtra1}%)`} v={hhmm(t.extra1)} forte />
+        <Linha k={`Extras 80% — demais h/dia (${cfg.ponto.pctExtra2}%)`} v={hhmm(t.extra2)} forte />
+        <Linha k={`Extras 100% — domingo/feriado/compensado (${cfg.ponto.pctEspecial}%)`} v={hhmm(t.extraEspecial)} forte />
         {t.noturno > 0 && <Linha k={`Adicional noturno (${cfg.ponto.adicNoturno}%)`} v={hhmm(t.noturno)} />}
         {t.debito > 0 && <Linha k="Atrasos / saídas antecipadas" v={hhmm(t.debito)} />}
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "7px 0", fontSize: 14, borderBottom: `1px dashed ${C.line}` }}>
@@ -1271,11 +1305,11 @@ function ApuracaoPonto({ perfil }) {
 
   const exportarCSV = () => {
     if (!resumo || !func) return;
-    const l = ["Data;Dia;Marcacoes (NSR:hora:tipo);Trabalhado;Previsto;Extra dia util;Extra fim de semana;Noturno;Debito;Avisos"];
+    const l = ["Data;Dia;Marcacoes (NSR:hora:tipo);Trabalhado;Previsto;Extra 60%;Extra 80%;Extra 100%;Noturno;Debito;Avisos"];
     resumo.linhas.forEach((x) => l.push([
       fmtBR(x.dataRef), DIA_ROT[x.chave],
       x.marcacoes.map((m) => `${m.nsr}:${m.hora}:${m.tipo}`).join(" | "),
-      hhmm(x.trabalhado), hhmm(x.prevista), hhmm(x.extraNormal), hhmm(x.extraEspecial), hhmm(x.noturno), hhmm(x.debito),
+      hhmm(x.trabalhado), hhmm(x.prevista), hhmm(x.extra1), hhmm(x.extra2), hhmm(x.extraEspecial), hhmm(x.noturno), hhmm(x.debito),
       x.avisos.join(" / "),
     ].join(";")));
     const blob = new Blob(["\uFEFF" + l.join("\n")], { type: "text/csv;charset=utf-8" });
@@ -1312,8 +1346,9 @@ function ApuracaoPonto({ perfil }) {
           <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>{func.nome} · {rotMes(ym)}</div>
           <Linha k="Horas trabalhadas" v={hhmm(resumo.t.trabalhado)} forte />
           <Linha k="Jornada prevista" v={hhmm(resumo.t.previsto)} />
-          <Linha k={`Extras em dia útil (${cfg.ponto.pctNormal}%)`} v={hhmm(resumo.t.extraNormal)} forte />
-          <Linha k={`Extras fim de semana/feriado (${cfg.ponto.pctFimSemana}%)`} v={hhmm(resumo.t.extraEspecial)} forte />
+          <Linha k={`Extras 60% — 2 primeiras h/dia (${cfg.ponto.pctExtra1}%)`} v={hhmm(resumo.t.extra1)} forte />
+          <Linha k={`Extras 80% — demais h/dia (${cfg.ponto.pctExtra2}%)`} v={hhmm(resumo.t.extra2)} forte />
+          <Linha k={`Extras 100% — domingo/feriado/compensado (${cfg.ponto.pctEspecial}%)`} v={hhmm(resumo.t.extraEspecial)} forte />
           <Linha k={`Adicional noturno (${cfg.ponto.adicNoturno}%)`} v={hhmm(resumo.t.noturno)} />
           <Linha k="Atrasos / saídas antecipadas" v={hhmm(resumo.t.debito)} />
           <Linha k="Faltas em dia útil" v={resumo.t.faltas} />
@@ -1337,13 +1372,14 @@ function ApuracaoPonto({ perfil }) {
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 520 }}>
               <thead><tr style={{ color: C.mut, textAlign: "left" }}>
-                <th style={{ padding: 5 }}>Funcionário</th><th>Trabalhado</th><th>{cfg.ponto.pctNormal}%</th><th>{cfg.ponto.pctFimSemana}%</th><th>Faltas</th><th>Avisos</th>
+                <th style={{ padding: 5 }}>Funcionário</th><th>Trabalhado</th><th>{cfg.ponto.pctExtra1}%</th><th>{cfg.ponto.pctExtra2}%</th><th>{cfg.ponto.pctEspecial}%</th><th>Faltas</th><th>Avisos</th>
               </tr></thead>
               <tbody>{consolidado.linhas.map(({ f, t }) => (
                 <tr key={f.uid} style={{ borderTop: `1px solid ${C.line}` }}>
                   <td style={{ padding: 5, fontWeight: 700 }}>{f.nome}</td>
                   <td>{hhmm(t.trabalhado)}</td>
-                  <td style={{ fontWeight: 700 }}>{hhmm(t.extraNormal)}</td>
+                  <td style={{ fontWeight: 700 }}>{hhmm(t.extra1)}</td>
+                  <td style={{ fontWeight: 700 }}>{hhmm(t.extra2)}</td>
                   <td style={{ fontWeight: 700, color: t.extraEspecial ? C.red : C.ink }}>{hhmm(t.extraEspecial)}</td>
                   <td style={{ color: t.faltas ? C.red : C.ink }}>{t.faltas || "—"}</td>
                   <td style={{ color: t.avisos ? C.amber : C.ink }}>{t.avisos || "—"}</td>
@@ -1420,7 +1456,7 @@ function EspelhoPonto({ func, ym, cfg, perfil, fechar }) {
 
       <div style={secRel}>Marcações do período</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead><tr>{["Data", "Dia", "Entrada", "Saída almoço", "Volta almoço", "Saída", "Trabalhado", "Previsto", `Extra ${cfg.ponto.pctNormal}%`, `Extra ${cfg.ponto.pctFimSemana}%`, "Débito", "Ocorrência"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
+        <thead><tr>{["Data", "Dia", "Entrada", "Saída almoço", "Volta almoço", "Saída", "Trabalhado", "Previsto", `Ext ${cfg.ponto.pctExtra1}%`, `Ext ${cfg.ponto.pctExtra2}%`, `Ext ${cfg.ponto.pctEspecial}%`, "Débito", "Ocorrência"].map((h) => <th key={h} style={tabTh}>{h}</th>)}</tr></thead>
         <tbody>{linhas.map((l) => {
           const marcas = [0, 1, 2, 3].map((i) => l.marcacoes[i]?.hora || "");
           const descanso = l.prevista === 0;
@@ -1431,7 +1467,8 @@ function EspelhoPonto({ func, ym, cfg, perfil, fechar }) {
               {marcas.map((h, i) => <td key={i} style={tabTd}>{h || "—"}</td>)}
               <td style={{ ...tabTd, fontWeight: 700 }}>{l.trabalhado ? hhmm(l.trabalhado) : "—"}</td>
               <td style={tabTd}>{l.prevista ? hhmm(l.prevista) : "—"}</td>
-              <td style={{ ...tabTd, fontWeight: 800, color: l.extraNormal ? C.navy : C.mut }}>{l.extraNormal ? hhmm(l.extraNormal) : "—"}</td>
+              <td style={{ ...tabTd, fontWeight: 800, color: l.extra1 ? C.navy : C.mut }}>{l.extra1 ? hhmm(l.extra1) : "—"}</td>
+              <td style={{ ...tabTd, fontWeight: 800, color: l.extra2 ? C.navy : C.mut }}>{l.extra2 ? hhmm(l.extra2) : "—"}</td>
               <td style={{ ...tabTd, fontWeight: 800, color: l.extraEspecial ? C.red : C.mut }}>{l.extraEspecial ? hhmm(l.extraEspecial) : "—"}</td>
               <td style={{ ...tabTd, color: l.debito ? C.red : C.mut }}>{l.debito ? hhmm(l.debito) : "—"}</td>
               <td style={{ ...tabTd, fontSize: 9.5, color: C.amber }}>{l.feriado ? "Feriado. " : ""}{l.afastamento || ""}{l.avisos[0] || ""}</td>
@@ -1449,10 +1486,10 @@ function EspelhoPonto({ func, ym, cfg, perfil, fechar }) {
           <td style={tabTd}><b>Faltas:</b> {t.faltas}</td>
         </tr>
         <tr>
-          <td style={tabTd}><b>Extras dia útil ({cfg.ponto.pctNormal}%):</b> {hhmm(t.extraNormal)}</td>
-          <td style={tabTd}><b>Extras fim de semana/feriado ({cfg.ponto.pctFimSemana}%):</b> {hhmm(t.extraEspecial)}</td>
-          <td style={tabTd}><b>Adicional noturno ({cfg.ponto.adicNoturno}%):</b> {hhmm(t.noturno)}</td>
-          <td style={tabTd}><b>Atrasos:</b> {hhmm(t.debito)}</td>
+          <td style={tabTd}><b>Extras {cfg.ponto.pctExtra1}% (2 primeiras h/dia):</b> {hhmm(t.extra1)}</td>
+          <td style={tabTd}><b>Extras {cfg.ponto.pctExtra2}% (demais h/dia):</b> {hhmm(t.extra2)}</td>
+          <td style={tabTd}><b>Extras {cfg.ponto.pctEspecial}% (dom/fer/compensado):</b> {hhmm(t.extraEspecial)}</td>
+          <td style={tabTd}><b>Adic. noturno ({cfg.ponto.adicNoturno}%):</b> {hhmm(t.noturno)}</td>
         </tr>
         <tr>
           <td style={tabTd} colSpan={2}><b>Reflexo do DSR sobre horas extras (Súmula 172 do TST):</b> {hhmm(t.dsr)}</td>
@@ -1468,7 +1505,7 @@ function EspelhoPonto({ func, ym, cfg, perfil, fechar }) {
         (CLT art. 58, §1º). {cfg.ponto.modoTolerancia === "sumula366"
           ? "Ultrapassado o limite, computa-se a totalidade do tempo excedente à jornada, conforme a Súmula 366 do TST."
           : "ATENÇÃO: parametrizado para descontar a tolerância do tempo excedente — critério divergente da Súmula 366 do TST."}
-        {" "}Adicionais aplicados: {cfg.ponto.pctNormal}% em dia útil e {cfg.ponto.pctFimSemana}% em dia sem jornada prevista.
+        {" "}Adicionais de hora extra aplicados: {cfg.ponto.pctExtra1}% nas 2 primeiras horas do dia, {cfg.ponto.pctExtra2}% nas horas seguintes, e {cfg.ponto.pctEspecial}% em domingos, feriados ou dias já compensados.
         {cfg.ponto.cct?.sindicato ? ` Base normativa: ${cfg.ponto.cct.sindicato}${cfg.ponto.cct.mediador ? ` — registro Mediador/MTE ${cfg.ponto.cct.mediador}` : ""}${cfg.ponto.cct.vigencia ? ` (vigência ${cfg.ponto.cct.vigencia})` : ""}.` : " Convenção coletiva ainda não cadastrada nos parâmetros do sistema."}
         {" "}Valores monetários, quando exibidos, são estimativa para conferência — a folha de pagamento é elaborada pelo escritório contábil.
       </div>
@@ -1533,15 +1570,22 @@ function ParametrosPessoal({ perfil }) {
       </Cartao>
 
       <Cartao>
-        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 10 }}>Cálculo de horas extras</div>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 4 }}>Cálculo de horas extras</div>
+        <div style={{ fontSize: 12, color: C.mut, marginBottom: 10 }}>
+          Faixas escalonadas conforme a CCT. Ex. SEAAC Araraquara: {d.ponto.pctExtra1}% nas 2 primeiras horas do dia,
+          {" "}{d.ponto.pctExtra2}% nas seguintes, e {d.ponto.pctEspecial}% em domingo, feriado ou dia já compensado.
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <Campo rotulo="Adicional em dia útil" sufixo="%" inputMode="decimal" value={d.ponto.pctNormal} onChange={mp("pctNormal")} />
-          <Campo rotulo="Adicional em fim de semana" sufixo="%" inputMode="decimal" value={d.ponto.pctFimSemana} onChange={mp("pctFimSemana")} />
-          <Campo rotulo="Adicional em feriado" sufixo="%" inputMode="decimal" value={d.ponto.pctFeriado} onChange={mp("pctFeriado")} />
+          <Campo rotulo="Adicional 1ª faixa (até o limite)" sufixo="%" inputMode="decimal" value={d.ponto.pctExtra1} onChange={mp("pctExtra1")} />
+          <Campo rotulo="Limite da 1ª faixa" sufixo="h" inputMode="decimal"
+            value={((d.ponto.limiteExtra1Min ?? 120) / 60).toString().replace(".", ",")}
+            onChange={(e) => setD({ ...d, ponto: { ...d.ponto, limiteExtra1Min: Math.round((num(e.target.value) || 0) * 60) } })} />
+          <Campo rotulo="Adicional 2ª faixa (acima do limite)" sufixo="%" inputMode="decimal" value={d.ponto.pctExtra2} onChange={mp("pctExtra2")} />
+          <Campo rotulo="Adicional domingo/feriado/compensado" sufixo="%" inputMode="decimal" value={d.ponto.pctEspecial} onChange={mp("pctEspecial")} />
           <Campo rotulo="Adicional noturno" sufixo="%" inputMode="decimal" value={d.ponto.adicNoturno} onChange={mp("adicNoturno")} />
+          <Campo rotulo="Divisor mensal (valor-hora)" inputMode="numeric" value={d.ponto.horasMes} onChange={mp("horasMes")} />
           <Campo rotulo="Tolerância por marcação" sufixo="min" inputMode="numeric" value={d.ponto.toleranciaMarcacaoMin} onChange={mp("toleranciaMarcacaoMin")} />
           <Campo rotulo="Tolerância no dia" sufixo="min" inputMode="numeric" value={d.ponto.toleranciaDiaMin} onChange={mp("toleranciaDiaMin")} />
-          <Campo rotulo="Divisor mensal (valor-hora)" inputMode="numeric" value={d.ponto.horasMes} onChange={mp("horasMes")} />
           <Campo rotulo="Intervalo mínimo" sufixo="min" inputMode="numeric" value={d.ponto.intervaloMinimoMin} onChange={mp("intervaloMinimoMin")} />
         </div>
         <Sel rotulo="Como tratar o tempo que ultrapassa a tolerância" value={d.ponto.modoTolerancia}
