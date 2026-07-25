@@ -2602,12 +2602,12 @@ export default function App() {
       { id: "relatorios", ico: "📄", rot: "Relatórios" }];
     if (perfil.papel === "usina") return [
       { id: "nova", ico: "➕", rot: "Nova carga" }, { id: "dia", ico: "🚚", rot: "Cargas" },
-      { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }];
-    if (perfil.papel === "diretoria") return [{ id: "tv", ico: "📺", rot: "Painel ao vivo" }];
-    if (perfil.papel === "ambos") return [
+      { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }, ...pt];
+  if (perfil.papel === "diretoria") return [{ id: "tv", ico: "📺", rot: "Painel ao vivo" }, ...pt];
+   if (perfil.papel === "ambos") return [
       { id: "nova", ico: "➕", rot: "Nova" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" },
-      { id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar" }];
+      { id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar" }, ...pt];
     return [{ id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar dia" }, ...pt];
   }, [perfil?.papel, perfil?.ponto]);
   useEffect(() => { if (abas.length && !abas.find((a) => a.id === aba)) setAba(abas[0].id); }, [abas]);
