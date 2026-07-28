@@ -21,7 +21,6 @@
 // Todos os resultados marcados como estimativa; o laudo é do laboratório.
 // ============================================================================
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { db, storage } from "./firebase";
 import {
   collection, doc, setDoc, updateDoc, onSnapshot,
@@ -702,21 +701,22 @@ function RelatorioRAD({ registro: c, listaObra, fechar }) {
 // ETIQUETA DA AMOSTRA (AM-CAP) — para colar no recipiente
 // ============================================================================
 function EtiquetaAmostra({ registro: c, fechar }) {
-  const conteudoQR = JSON.stringify({
-    sistema: "Solocontrol 360",
-    amostra: c.amostra,
-    relatorio: c.numero,
-    produto: c.tipoCap,
-    nfe: c.nfe,
-    serie: c.serie || "",
-    obra: c.obraNome,
-    usina: c.usina,
-    dataColeta: c.dataRef,
-    temperaturaRecebimento: c.tempRecebimento,
-    placaCavalo: c.placaCavalo || "",
-    placaCarreta: c.placaCarreta || "",
-    coletadoPor: c.criadoPor || "",
-  });
+  const conteudoQR = [
+    "SOLOCONTROL 360",
+    `Amostra: ${c.amostra || "—"}`,
+    `Relatório: ${c.numero || "—"}`,
+    `Produto: ${c.tipoCap || "—"}`,
+    `NF-e: ${c.nfe || "—"}${c.serie ? ` · Série ${c.serie}` : ""}`,
+    `Obra: ${c.obraNome || "—"}`,
+    `Usina: ${c.usina || "—"}`,
+    `Data de coleta: ${fmtBR(c.dataRef)}`,
+    `Temperatura: ${c.tempRecebimento ?? "—"} °C`,
+    `Placas: ${c.placaCavalo || "—"} / ${c.placaCarreta || "—"}`,
+    `Coletado por: ${c.criadoPor || "—"}`,
+  ].join("\n");
+
+  // QR Code gerado por URL pública, sem instalar bibliotecas no projeto.
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${encodeURIComponent(conteudoQR)}`;
 
   return (
     <Impressao fechar={fechar} nomeArquivo={`${c.amostra}.pdf`}>
@@ -748,14 +748,13 @@ function EtiquetaAmostra({ registro: c, fechar }) {
             </div>
 
             <div style={{ textAlign: "center", border: `1px solid ${C.line}`, borderRadius: 10, padding: 8, background: "#fff" }}>
-              <QRCodeSVG
-                value={conteudoQR}
-                size={108}
-                level="M"
-                includeMargin={false}
-                bgColor="#FFFFFF"
-                fgColor="#111827"
-                title={`Rastreabilidade da amostra ${c.amostra}`}
+              <img
+                src={qrUrl}
+                alt={`QR Code de rastreabilidade da amostra ${c.amostra}`}
+                width="108"
+                height="108"
+                crossOrigin="anonymous"
+                style={{ width: 108, height: 108, display: "block", margin: "0 auto" }}
               />
               <div style={{ fontSize: 9, lineHeight: 1.25, color: C.mut, marginTop: 6, fontWeight: 700 }}>
                 ESCANEIE PARA<br />IDENTIFICAR A AMOSTRA
