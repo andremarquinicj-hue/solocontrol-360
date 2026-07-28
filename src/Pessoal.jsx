@@ -654,7 +654,12 @@ export function useConfigPessoal() {
 export function useFuncionarios(apenasAtivos = false) {
   const [l, setL] = useState([]);
   useEffect(() => onSnapshot(collection(db, "funcionarios"), (s) => {
-    const a = s.docs.map((d) => ({ uid: d.id, ...d.data() }));
+    const a = s.docs.map((d) => ({
+      ...d.data(),
+      docId: d.id,
+      uid: d.id,
+      pontoUid: d.id,
+    }));
     a.sort((x, y) => (x.nome || "").localeCompare(y.nome || ""));
     setL(apenasAtivos ? a.filter((f) => f.ativo !== false) : a);
   }), [apenasAtivos]);
@@ -744,17 +749,15 @@ function useFuncionarioDoPerfil(perfil) {
 
         // Usa exatamente o UID guardado na ficha da coordenação.
         // Se não existir, usa o ID do documento.
-        const pontoUid =
-          dados?.uidFuncionario ||
-          dados?.authUid ||
-          dados?.uid ||
-          snap.id;
 
         setFunc({
           ...dados,
-          uid: pontoUid,
-          pontoUid,
+          // Fonte única: o ID da ficha em /funcionarios é também a chave
+          // usada em /ponto. Nunca usa um UID salvo dentro do documento.
+          uid: snap.id,
+          pontoUid: snap.id,
           docId: snap.id,
+          authUid: perfil.uid,
         });
       };
 
@@ -1119,7 +1122,7 @@ function usePontoMesFuncionario(perfil, func, ym) {
 export function TelaPonto({ perfil }) {
   const cfg = useConfigPessoal();
   const func = useFuncionarioDoPerfil(perfil);
-  const pontoUid = func?.pontoUid || func?.uid || perfil.uid;
+  const pontoUid = func?.docId || func?.pontoUid || func?.uid || perfil.uid;
   const hoje = hojeISO();
   const pd = usePontoDia(pontoUid, hoje);
   const [ym, setYm] = useState(mesRef());
@@ -1801,7 +1804,8 @@ function ApuracaoPonto({ perfil }) {
   const [consolidado, setConsolidado] = useState(null);
   const [carregando, setCarregando] = useState("");
   const func = funcs.find((f) => f.uid === uid);
-  const mes = usePontoMes(uid, ym);
+  const pontoUidSelecionado = func?.pontoUid || func?.docId || uid;
+  const mes = usePontoMes(pontoUidSelecionado, ym);
 
   const resumo = useMemo(() => (uid && cfg ? calcularMes({ ym, dias: mes, func, cfg }) : null), [uid, ym, mes, func, cfg]);
 
@@ -1810,9 +1814,14 @@ function ApuracaoPonto({ perfil }) {
     try {
       const s = await getDocs(query(collection(db, "ponto"), where("dataRef", ">=", `${ym}-01`), where("dataRef", "<=", `${ym}-31`)));
       const porUid = {};
-      s.docs.forEach((d) => { const x = d.data(); (porUid[x.uid] ||= {})[x.dataRef] = x; });
+      s.docs.forEach((d) => {
+        const x = d.data();
+        const chave = x.funcionarioDocId || x.uid;
+        if (!chave || !x.dataRef) return;
+        (porUid[chave] ||= {})[x.dataRef] = pontoComAjuste(x);
+      });
       const linhas = funcs.filter((f) => f.pontoAtivo !== false).map((f) => ({
-        f, ...calcularMes({ ym, dias: porUid[f.uid] || {}, func: f, cfg }),
+        f, ...calcularMes({ ym, dias: porUid[f.pontoUid || f.docId || f.uid] || {}, func: f, cfg }),
       }));
       setConsolidado({ ym, linhas });
     } catch { alert("Não foi possível consolidar. Verifique a internet."); }
@@ -1870,7 +1879,7 @@ function ApuracaoPonto({ perfil }) {
           <Linha k="Atrasos / saídas antecipadas" v={hhmm(resumo.t.debito)} />
           <Linha k="Faltas em dia útil" v={resumo.t.faltas} />
           <Linha k="Reflexo do DSR sobre extras (Súm. 172)" v={hhmm(resumo.t.dsr)} />
-          <BancoLinhaCoord uid={uid} func={func} cfg={cfg} ym={ym} />
+          <BancoLinhaCoord uid={pontoUidSelecionado} func={func} cfg={cfg} ym={ym} />
           {resumo.t.vlTotal != null && <Linha k="Estimativa de adicionais (conferência)" v={brl(resumo.t.vlTotal)} forte />}
           {resumo.t.avisos > 0 && (
             <div style={{ background: C.warnBg, color: C.amber, fontSize: 12.5, fontWeight: 700, borderRadius: 9, padding: "8px 12px", marginTop: 10 }}>
@@ -1997,8 +2006,11 @@ function EditorCorrecaoPonto({ func, ym, mes, perfil, fechar }) {
 
     setSalvando(true);
     try {
-      await setDoc(doc(db, "ponto", `${func.uid}_${dataRef}`), {
-        uid: func.uid,
+      const pontoUid = func.pontoUid || func.docId || func.uid;
+      await setDoc(doc(db, "ponto", `${pontoUid}_${dataRef}`), {
+        uid: pontoUid,
+        funcionarioDocId: pontoUid,
+        authUid: func.authUid || "",
         nome: func.nome,
         dataRef,
         matricula: func.matricula || "",
