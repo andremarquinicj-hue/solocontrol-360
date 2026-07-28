@@ -991,6 +991,128 @@ async function registrarMarcacao({ perfil, func, tipo, pontoUid }) {
   return marca;
 }
 
+
+function normalizarIdentidade(v = "") {
+  return String(v)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\W+/g, "")
+    .toLowerCase();
+}
+
+function usePontoMesFuncionario(perfil, func, ym) {
+  const [mes, setMes] = useState({});
+
+  useEffect(() => {
+    if (!perfil?.uid) {
+      setMes({});
+      return;
+    }
+
+    let ativo = true;
+
+    const carregar = async () => {
+      try {
+        // Busca todos os registros do mês e identifica os pertencentes ao
+        // funcionário por CPF, matrícula, nome ou UID. Dessa forma, também
+        // encontra correções gravadas pela coordenação com outro UID.
+        const snap = await getDocs(
+          query(
+            collection(db, "ponto"),
+            where("dataRef", ">=", `${ym}-01`),
+            where("dataRef", "<=", `${ym}-31`)
+          )
+        );
+
+        const cpf = String(func?.cpf || "").replace(/\D/g, "");
+        const matricula = normalizarIdentidade(func?.matricula || "");
+        const nomePerfil = normalizarIdentidade(perfil?.nome || "");
+        const nomeFicha = normalizarIdentidade(func?.nome || "");
+        const uids = new Set(
+          [
+            perfil?.uid,
+            func?.uid,
+            func?.pontoUid,
+            func?.authUid,
+            func?.uidFuncionario,
+            func?.docId,
+          ].filter(Boolean)
+        );
+
+        const mapa = {};
+
+        snap.docs.forEach((docSnap) => {
+          const bruto = docSnap.data();
+          const cpfRegistro = String(bruto?.cpf || "").replace(/\D/g, "");
+          const matriculaRegistro = normalizarIdentidade(bruto?.matricula || "");
+          const nomeRegistro = normalizarIdentidade(bruto?.nome || "");
+
+          const pertence =
+            (cpf && cpfRegistro && cpf === cpfRegistro) ||
+            (matricula && matriculaRegistro && matricula === matriculaRegistro) ||
+            (nomeFicha && nomeRegistro && nomeFicha === nomeRegistro) ||
+            (nomePerfil && nomeRegistro && nomePerfil === nomeRegistro) ||
+            uids.has(bruto?.uid) ||
+            [...uids].some((uid) => docSnap.id.startsWith(`${uid}_`));
+
+          if (!pertence || !bruto?.dataRef) return;
+
+          const tratado = pontoComAjuste(bruto);
+          const existente = mapa[bruto.dataRef];
+
+          // Em caso de registros duplicados para o mesmo dia, prioriza aquele
+          // que contém correção da coordenação. Depois, o mais atualizado.
+          const pontosTratado =
+            ((tratado.ajustes?.length || 0) * 1000) +
+            (tratado.marcacoes?.length || 0);
+
+          const pontosExistente = existente
+            ? (((existente.ajustes?.length || 0) * 1000) +
+               (existente.marcacoes?.length || 0))
+            : -1;
+
+          if (
+            !existente ||
+            pontosTratado > pontosExistente ||
+            (
+              pontosTratado === pontosExistente &&
+              String(tratado.atualizadoEm || "") >
+                String(existente.atualizadoEm || "")
+            )
+          ) {
+            mapa[bruto.dataRef] = tratado;
+          }
+        });
+
+        if (ativo) setMes(mapa);
+      } catch (erro) {
+        console.error("Erro ao carregar correções do funcionário:", erro);
+        if (ativo) setMes({});
+      }
+    };
+
+    carregar();
+
+    return () => {
+      ativo = false;
+    };
+  }, [
+    perfil?.uid,
+    perfil?.nome,
+    func?.uid,
+    func?.pontoUid,
+    func?.authUid,
+    func?.uidFuncionario,
+    func?.docId,
+    func?.cpf,
+    func?.matricula,
+    func?.nome,
+    ym,
+  ]);
+
+  return mes;
+}
+
 // ============================================================================
 // TELA DO FUNCIONÁRIO — bater o ponto
 // ============================================================================
@@ -1001,7 +1123,7 @@ export function TelaPonto({ perfil }) {
   const hoje = hojeISO();
   const pd = usePontoDia(pontoUid, hoje);
   const [ym, setYm] = useState(mesRef());
-  const mes = usePontoMes(pontoUid, ym);
+  const mes = usePontoMesFuncionario(perfil, func, ym);
   const [comprovante, setComprovante] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const [verMes, setVerMes] = useState(false);
@@ -1116,11 +1238,22 @@ export function TelaPonto({ perfil }) {
 // Card de saldo (banco de horas) — mostra ao funcionário se está positivo ou
 // negativo, somando todos os meses. Card de destaque no topo do cartão de ponto.
 function CardBanco({ uid, func, cfg, mes, ym }) {
-  const banco = useBancoHoras(uid, func, cfg, ym);
+  const bancoCalculado = useBancoHoras(uid, func, cfg, ym);
   const resumoMes = useMemo(() => {
     if (!cfg || !func) return null;
     return calcularMes({ ym, dias: mes || {}, func, cfg }).t;
   }, [ym, mes, func, cfg]);
+
+  const banco = useMemo(() => {
+    const saldoMesAtual = resumoMes?.saldo || 0;
+    return {
+      ...bancoCalculado,
+      saldoAcumulado:
+        bancoCalculado.carregando || bancoCalculado.saldoAcumulado === 0
+          ? saldoMesAtual
+          : bancoCalculado.saldoAcumulado,
+    };
+  }, [bancoCalculado, resumoMes?.saldo]);
 
   if (!cfg) return null;
 
