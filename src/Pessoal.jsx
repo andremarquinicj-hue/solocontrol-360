@@ -650,7 +650,12 @@ export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
         where("dataRef", "<=", `${ymAte}-31`),
       ));
       const porMes = {};
-      s.docs.forEach((d) => { const x = d.data(); (porMes[mesRef(x.dataRef)] ||= {})[x.dataRef] = x; });
+      s.docs.forEach((d) => {
+        // Usa a última correção registrada pela coordenação também no
+        // cálculo do banco de horas acumulado do funcionário.
+        const x = pontoComAjuste(d.data());
+        (porMes[mesRef(x.dataRef)] ||= {})[x.dataRef] = x;
+      });
       let acc = inicial;
       Object.keys(porMes).sort().forEach((ym) => {
         acc += calcularMes({ ym, dias: porMes[ym], func, cfg }).t.saldo;
