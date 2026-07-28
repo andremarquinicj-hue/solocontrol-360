@@ -2628,7 +2628,8 @@ export default function App() {
      <Shell perfil={perfil} abas={abas} aba={aba} setAba={setAba}>
           {aba === "ponto" && <TelaPonto perfil={perfil} />}
           {aba === "pessoal" && perfil.papel === "coordenador" && <CoordPessoal perfil={perfil} />}
-          {perfil.papel === "coordenador" && !["pessoal", "ponto"].includes(aba) && <TelaCoordenador perfil={perfil} aba={aba} />}
+       {aba === "cap" && <TelaCAP perfil={perfil} />}
+        {perfil.papel === "coordenador" && !["pessoal", "ponto", "cap"].includes(aba) && <TelaCoordenador perfil={perfil} aba={aba} />}
         {(perfil.papel === "usina" || perfil.papel === "ambos") && ["nova", "dia", "ensaios", "resumo"].includes(aba) && (
           aba === "nova" ? <UsinaNovaCarga perfil={perfil} /> :
           aba === "dia" ? <UsinaCargasDia perfil={perfil} /> :
