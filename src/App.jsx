@@ -18,6 +18,7 @@ import {
 } from "firebase/firestore";
 import { ref as sRef, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
 import { TelaPonto, CoordPessoal } from "./Pessoal.jsx";
+import { TelaCAP } from "./CAP.jsx";
 
 // ----------------------------------------------------------------------------
 // Parâmetros técnicos (DNIT 031/2006-ES — confirmar sempre com o projeto)
