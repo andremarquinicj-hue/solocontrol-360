@@ -504,6 +504,19 @@ export function calcularMes({ ym, dias, func, cfg }) {
   const regime = func?.regime || REGIME_PADRAO;
   const hoje = hojeISO();
   const admissaoISO = normalizarDataISO(func?.admissao);
+
+  // Usa também o primeiro registro existente no mês como referência.
+  // Isso evita descontar dias anteriores quando a admissão não chegou
+  // corretamente no perfil do funcionário.
+  const primeiroRegistroMes = Object.keys(dias || {})
+    .filter((d) => (dias[d]?.marcacoes?.length || dias[d]?.ajustes?.length || dias[d]?.afastamento))
+    .sort()[0] || "";
+
+  const inicioEfetivo = [admissaoISO, primeiroRegistroMes]
+    .filter(Boolean)
+    .sort()
+    .slice(-1)[0] || "";
+
   const linhas = diasDoMes(ym).map((d) => {
     // Dias futuros não entram no saldo, faltas, atrasos ou jornada prevista.
     if (d > hoje) {
@@ -533,7 +546,7 @@ export function calcularMes({ ym, dias, func, cfg }) {
 
     // Dias anteriores à admissão não geram jornada prevista, faltas,
     // atrasos ou saldo negativo no banco de horas.
-    if (admissaoISO && d < admissaoISO) {
+    if (inicioEfetivo && d < inicioEfetivo) {
       const chave = DIA_SEM[dataDe(d).getDay()];
       return {
         dataRef: d,
@@ -702,20 +715,25 @@ export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
       const porMes = {};
       const admissaoISO = normalizarDataISO(func?.admissao);
 
-      s.docs.forEach((d) => {
-        // Usa a última correção registrada pela coordenação também no
-        // cálculo do banco de horas acumulado do funcionário.
-        const x = pontoComAjuste(d.data());
+      const registros = s.docs
+        .map((d) => pontoComAjuste(d.data()))
+        .filter((x) => x?.dataRef)
+        .sort((a, b) => a.dataRef.localeCompare(b.dataRef));
 
-        // Ignora qualquer registro anterior à admissão.
-        if (admissaoISO && x.dataRef < admissaoISO) return;
+      const primeiroRegistro = registros[0]?.dataRef || "";
+      const inicioEfetivo = [admissaoISO, primeiroRegistro]
+        .filter(Boolean)
+        .sort()
+        .slice(-1)[0] || "";
 
+      registros.forEach((x) => {
+        if (inicioEfetivo && x.dataRef < inicioEfetivo) return;
         (porMes[mesRef(x.dataRef)] ||= {})[x.dataRef] = x;
       });
 
       let acc = inicial;
       Object.keys(porMes).sort().forEach((ym) => {
-        if (admissaoISO && `${ym}-31` < admissaoISO) return;
+        if (inicioEfetivo && `${ym}-31` < inicioEfetivo) return;
         acc += calcularMes({ ym, dias: porMes[ym], func, cfg }).t.saldo;
       });
       if (vivo) setR({ carregando: false, saldoAcumulado: acc, ateMes: ymAte, saldoInicial: inicial });
