@@ -2609,6 +2609,7 @@ export default function App() {
    if (perfil.papel === "ambos") return [
       { id: "nova", ico: "➕", rot: "Nova" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" },
+      { id: "cap", ico: "🛢️", rot: "CAP" },
       { id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar" }, ...pt];
     return [{ id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar dia" }, ...pt];
   }, [perfil?.papel, perfil?.ponto]);
