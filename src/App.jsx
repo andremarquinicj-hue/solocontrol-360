@@ -2601,8 +2601,9 @@ export default function App() {
       { id: "painel", ico: "📊", rot: "Painel" }, { id: "obras", ico: "🏗️", rot: "Obras" },
       { id: "equipe", ico: "👥", rot: "Equipe" }, { id: "pessoal", ico: "🪪", rot: "Pessoal" },
       { id: "relatorios", ico: "📄", rot: "Relatórios" }];
-    if (perfil.papel === "usina") return [
+   if (perfil.papel === "usina") return [
       { id: "nova", ico: "➕", rot: "Nova carga" }, { id: "dia", ico: "🚚", rot: "Cargas" },
+      { id: "cap", ico: "🛢️", rot: "CAP" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }, ...pt];
   if (perfil.papel === "diretoria") return [{ id: "tv", ico: "📺", rot: "Painel ao vivo" }, ...pt];
    if (perfil.papel === "ambos") return [
