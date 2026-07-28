@@ -66,6 +66,28 @@ export const agoraHM = () => {
 };
 export const agoraISO = () => new Date().toISOString();
 export const fmtBR = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
+export const normalizarDataISO = (valor) => {
+  if (!valor) return "";
+  const s = String(valor).trim();
+
+  // Já está em YYYY-MM-DD.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // Converte DD/MM/YYYY para YYYY-MM-DD.
+  const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+
+  // Firebase Timestamp ou Date.
+  if (valor?.toDate) {
+    const d = valor.toDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  if (valor instanceof Date && !isNaN(valor)) {
+    return `${valor.getFullYear()}-${String(valor.getMonth() + 1).padStart(2, "0")}-${String(valor.getDate()).padStart(2, "0")}`;
+  }
+
+  return "";
+};
 export const fmtDataHora = () => {
   const d = new Date();
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -481,6 +503,7 @@ export function calcularMes({ ym, dias, func, cfg }) {
   const feriados = Object.fromEntries((cfg?.feriados || []).map((f) => [f.data, f.nome || "Feriado"]));
   const regime = func?.regime || REGIME_PADRAO;
   const hoje = hojeISO();
+  const admissaoISO = normalizarDataISO(func?.admissao);
   const linhas = diasDoMes(ym).map((d) => {
     // Dias futuros não entram no saldo, faltas, atrasos ou jornada prevista.
     if (d > hoje) {
@@ -510,7 +533,7 @@ export function calcularMes({ ym, dias, func, cfg }) {
 
     // Dias anteriores à admissão não geram jornada prevista, faltas,
     // atrasos ou saldo negativo no banco de horas.
-    if (func?.admissao && d < func.admissao) {
+    if (admissaoISO && d < admissaoISO) {
       const chave = DIA_SEM[dataDe(d).getDay()];
       return {
         dataRef: d,
@@ -677,14 +700,22 @@ export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
         where("dataRef", "<=", ymAte === mesRef() ? hojeISO() : `${ymAte}-31`),
       ));
       const porMes = {};
+      const admissaoISO = normalizarDataISO(func?.admissao);
+
       s.docs.forEach((d) => {
         // Usa a última correção registrada pela coordenação também no
         // cálculo do banco de horas acumulado do funcionário.
         const x = pontoComAjuste(d.data());
+
+        // Ignora qualquer registro anterior à admissão.
+        if (admissaoISO && x.dataRef < admissaoISO) return;
+
         (porMes[mesRef(x.dataRef)] ||= {})[x.dataRef] = x;
       });
+
       let acc = inicial;
       Object.keys(porMes).sort().forEach((ym) => {
+        if (admissaoISO && `${ym}-31` < admissaoISO) return;
         acc += calcularMes({ ym, dias: porMes[ym], func, cfg }).t.saldo;
       });
       if (vivo) setR({ carregando: false, saldoAcumulado: acc, ateMes: ymAte, saldoInicial: inicial });
