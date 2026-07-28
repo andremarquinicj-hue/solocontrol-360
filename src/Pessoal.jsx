@@ -668,6 +668,61 @@ export function useFuncionario(uid) {
   }, [uid]);
   return f;
 }
+
+function useFuncionarioDoPerfil(perfil) {
+  const [func, setFunc] = useState(null);
+
+  useEffect(() => {
+    if (!perfil?.uid) {
+      setFunc(null);
+      return;
+    }
+
+    let ativo = true;
+    let cancelar = () => {};
+
+    (async () => {
+      const direto = await getDoc(doc(db, "funcionarios", perfil.uid));
+
+      if (direto.exists()) {
+        if (ativo) setFunc({ uid: direto.id, ...direto.data() });
+        cancelar = onSnapshot(doc(db, "funcionarios", direto.id), (snap) => {
+          if (ativo && snap.exists()) setFunc({ uid: snap.id, ...snap.data() });
+        });
+        return;
+      }
+
+      // Caso o UID do login seja diferente do ID da ficha criada pela coordenação,
+      // localiza a ficha pelo e-mail. Essa era a causa de cada tela ler um cartão diferente.
+      if (perfil.email) {
+        const busca = await getDocs(query(
+          collection(db, "funcionarios"),
+          where("email", "==", perfil.email)
+        ));
+
+        const encontrado = busca.docs[0];
+        if (encontrado) {
+          if (ativo) setFunc({ uid: encontrado.id, ...encontrado.data() });
+          cancelar = onSnapshot(doc(db, "funcionarios", encontrado.id), (snap) => {
+            if (ativo && snap.exists()) setFunc({ uid: snap.id, ...snap.data() });
+          });
+          return;
+        }
+      }
+
+      if (ativo) setFunc({ uid: perfil.uid, semCadastro: true });
+    })().catch(() => {
+      if (ativo) setFunc({ uid: perfil.uid, semCadastro: true });
+    });
+
+    return () => {
+      ativo = false;
+      cancelar();
+    };
+  }, [perfil?.uid, perfil?.email]);
+
+  return func;
+}
 function usePontoDia(uid, dataRef) {
   const [d, setD] = useState(null);
   useEffect(() => {
@@ -845,7 +900,7 @@ export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
 // contador da nuvem com um contador de sessão em memória. Assim dois toques
 // rápidos recebem números diferentes, e funciona também offline.
 let _nsrSessao = 0;
-async function registrarMarcacao({ perfil, func, tipo }) {
+async function registrarMarcacao({ perfil, func, tipo, pontoUid }) {
   // ↓ tudo isto roda de forma síncrona, antes de qualquer await:
   const base = Math.max(func?.nsr || 0, _nsrSessao);
   const nsr = base + 1;
@@ -859,13 +914,13 @@ async function registrarMarcacao({ perfil, func, tipo }) {
     origem: "PWA Solocontrol 360",
     disp: (navigator.userAgent || "").slice(0, 90),
   };
-  setDoc(doc(db, "ponto", `${perfil.uid}_${dataRef}`), {
-    uid: perfil.uid, nome: perfil.nome, dataRef,
+  setDoc(doc(db, "ponto", `${pontoUid}_${dataRef}`), {
+    uid: pontoUid, nome: perfil.nome, dataRef,
     matricula: func?.matricula || "", cpf: func?.cpf || "",
     marcacoes: arrayUnion(marca), atualizadoEm: agoraISO(),
   }, { merge: true }).catch(() => {});
   // grava o NSR efetivamente usado (não increment, para bater com o exibido)
-  updateDoc(doc(db, "funcionarios", perfil.uid), { nsr, ultimaMarcacao: em }).catch(() => {});
+  updateDoc(doc(db, "funcionarios", pontoUid), { nsr, ultimaMarcacao: em }).catch(() => {});
   return marca;
 }
 
@@ -874,11 +929,12 @@ async function registrarMarcacao({ perfil, func, tipo }) {
 // ============================================================================
 export function TelaPonto({ perfil }) {
   const cfg = useConfigPessoal();
-  const func = useFuncionario(perfil.uid);
+  const func = useFuncionarioDoPerfil(perfil);
+  const pontoUid = func?.uid || perfil.uid;
   const hoje = hojeISO();
-  const pd = usePontoDia(perfil.uid, hoje);
+  const pd = usePontoDia(pontoUid, hoje);
   const [ym, setYm] = useState(mesRef());
-  const mes = usePontoMes(perfil.uid, ym);
+  const mes = usePontoMes(pontoUid, ym);
   const [comprovante, setComprovante] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const [verMes, setVerMes] = useState(false);
@@ -893,7 +949,7 @@ export function TelaPonto({ perfil }) {
   const bater = async (tipo) => {
     setOcupado(true);
     try {
-      const m = await registrarMarcacao({ perfil, func, tipo });
+      const m = await registrarMarcacao({ perfil, func, tipo, pontoUid });
       setComprovante(m);
     } finally { setOcupado(false); }
   };
@@ -922,7 +978,7 @@ export function TelaPonto({ perfil }) {
         </div>
       </Cartao>
 
-      <CardBanco uid={perfil.uid} func={func} cfg={cfg} mes={mes} ym={ym} />
+      <CardBanco uid={pontoUid} func={func} cfg={cfg} mes={mes} ym={ym} />
 
       {proximo ? (
         <Btn tom={proximo.id === "saida" ? "red" : proximo.id === "saida_almoco" ? "cinza" : "ok"}
@@ -1124,7 +1180,7 @@ function Comprovante({ m, perfil, func, fechar }) {
 // Espelho resumido do próprio funcionário
 function MeuEspelho({ perfil, func, cfg, ym, setYm, mes }) {
   const { linhas, t } = useMemo(() => calcularMes({ ym, dias: mes, func, cfg }), [ym, mes, func, cfg]);
-  const banco = useBancoHoras(perfil.uid, func, cfg, ym); // acumulado até o mês escolhido
+  const banco = useBancoHoras(func?.uid || perfil.uid, func, cfg, ym); // acumulado até o mês escolhido
   const posMes = t.saldo >= 0, posAcc = banco.saldoAcumulado >= 0;
   return (
     <>
