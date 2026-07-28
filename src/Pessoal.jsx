@@ -480,7 +480,34 @@ export function calcularMes({ ym, dias, func, cfg }) {
   const p = cfg?.ponto || CFG_PADRAO.ponto;
   const feriados = Object.fromEntries((cfg?.feriados || []).map((f) => [f.data, f.nome || "Feriado"]));
   const regime = func?.regime || REGIME_PADRAO;
+  const hoje = hojeISO();
   const linhas = diasDoMes(ym).map((d) => {
+    // Dias futuros não entram no saldo, faltas, atrasos ou jornada prevista.
+    if (d > hoje) {
+      const chave = DIA_SEM[dataDe(d).getDay()];
+      return {
+        dataRef: d,
+        chave,
+        feriado: false,
+        afastamento: "Data futura",
+        prevista: 0,
+        trabalhado: 0,
+        intervalo: 0,
+        noturno: 0,
+        pares: [],
+        marcacoes: [],
+        impar: false,
+        extra1: 0,
+        extra2: 0,
+        extraNormal: 0,
+        extraEspecial: 0,
+        debito: 0,
+        tolerado: 0,
+        avisos: [],
+        saldo: 0,
+      };
+    }
+
     // Dias anteriores à admissão não geram jornada prevista, faltas,
     // atrasos ou saldo negativo no banco de horas.
     if (func?.admissao && d < func.admissao) {
@@ -647,7 +674,7 @@ export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
       const s = await getDocs(query(
         collection(db, "ponto"),
         where("uid", "==", uid),
-        where("dataRef", "<=", `${ymAte}-31`),
+        where("dataRef", "<=", ymAte === mesRef() ? hojeISO() : `${ymAte}-31`),
       ));
       const porMes = {};
       s.docs.forEach((d) => {
