@@ -21,6 +21,7 @@
 // Todos os resultados marcados como estimativa; o laudo é do laboratório.
 // ============================================================================
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { db, storage } from "./firebase";
 import {
   collection, doc, setDoc, updateDoc, onSnapshot,
@@ -701,9 +702,25 @@ function RelatorioRAD({ registro: c, listaObra, fechar }) {
 // ETIQUETA DA AMOSTRA (AM-CAP) — para colar no recipiente
 // ============================================================================
 function EtiquetaAmostra({ registro: c, fechar }) {
+  const conteudoQR = JSON.stringify({
+    sistema: "Solocontrol 360",
+    amostra: c.amostra,
+    relatorio: c.numero,
+    produto: c.tipoCap,
+    nfe: c.nfe,
+    serie: c.serie || "",
+    obra: c.obraNome,
+    usina: c.usina,
+    dataColeta: c.dataRef,
+    temperaturaRecebimento: c.tempRecebimento,
+    placaCavalo: c.placaCavalo || "",
+    placaCarreta: c.placaCarreta || "",
+    coletadoPor: c.criadoPor || "",
+  });
+
   return (
     <Impressao fechar={fechar} nomeArquivo={`${c.amostra}.pdf`}>
-      <div style={{ maxWidth: 420, margin: "0 auto", border: `2px solid ${C.navy}`, borderRadius: 14, overflow: "hidden" }}>
+      <div style={{ maxWidth: 480, margin: "0 auto", border: `2px solid ${C.navy}`, borderRadius: 14, overflow: "hidden", breakInside: "avoid" }}>
         <div style={{ background: C.navy, color: "#fff", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
           <Logo s={34} />
           <div>
@@ -711,19 +728,41 @@ function EtiquetaAmostra({ registro: c, fechar }) {
             <div style={{ fontSize: 10, color: "#AEB8E0" }}>Etiqueta de amostra · Controle tecnológico</div>
           </div>
         </div>
+
         <div style={{ padding: 18 }}>
           <div style={{ textAlign: "center", marginBottom: 14 }}>
-            <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 34, color: C.red, lineHeight: 1 }}>{c.amostra}</div>
+            <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 32, color: C.red, lineHeight: 1 }}>{c.amostra}</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.mut, marginTop: 4 }}>Vinculada ao {c.numero}</div>
           </div>
-          <Linha k="Produto" v={c.tipoCap} forte />
-          <Linha k="NF-e" v={`${c.nfe}${c.serie ? ` · Série ${c.serie}` : ""}`} />
-          <Linha k="Obra" v={c.obraNome} />
-          <Linha k="Usina / local" v={c.usina} />
-          <Linha k="Data de coleta" v={fmtBR(c.dataRef)} />
-          <Linha k="Temp. no recebimento" v={`${c.tempRecebimento} °C`} />
-          <Linha k="Placa (cavalo/carreta)" v={`${c.placaCavalo || "—"} / ${c.placaCarreta || "—"}`} />
-          <Linha k="Coletado por" v={c.criadoPor || "—"} />
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 126px", gap: 16, alignItems: "start" }}>
+            <div>
+              <Linha k="Produto" v={c.tipoCap} forte />
+              <Linha k="NF-e" v={`${c.nfe}${c.serie ? ` · Série ${c.serie}` : ""}`} />
+              <Linha k="Obra" v={c.obraNome} />
+              <Linha k="Usina / local" v={c.usina} />
+              <Linha k="Data de coleta" v={fmtBR(c.dataRef)} />
+              <Linha k="Temp. no recebimento" v={`${c.tempRecebimento} °C`} />
+              <Linha k="Placa (cavalo/carreta)" v={`${c.placaCavalo || "—"} / ${c.placaCarreta || "—"}`} />
+              <Linha k="Coletado por" v={c.criadoPor || "—"} />
+            </div>
+
+            <div style={{ textAlign: "center", border: `1px solid ${C.line}`, borderRadius: 10, padding: 8, background: "#fff" }}>
+              <QRCodeSVG
+                value={conteudoQR}
+                size={108}
+                level="M"
+                includeMargin={false}
+                bgColor="#FFFFFF"
+                fgColor="#111827"
+                title={`Rastreabilidade da amostra ${c.amostra}`}
+              />
+              <div style={{ fontSize: 9, lineHeight: 1.25, color: C.mut, marginTop: 6, fontWeight: 700 }}>
+                ESCANEIE PARA<br />IDENTIFICAR A AMOSTRA
+              </div>
+            </div>
+          </div>
+
           <div style={{ background: C.warnBg, borderRadius: 8, padding: "8px 12px", marginTop: 12, fontSize: 11, color: C.amber, fontWeight: 600 }}>
             Caracterização a cargo do laboratório. Manter a amostra identificada e ao abrigo de contaminação.
           </div>
