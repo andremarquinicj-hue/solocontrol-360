@@ -36,7 +36,7 @@ import { getAuth, createUserWithEmailAndPassword, signOut } from "firebase/auth"
 import { initializeApp, getApps } from "firebase/app";
 import {
   collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot,
-  query, where, getDocs, arrayUnion,
+  query, where, getDocs, getDoc, arrayUnion,
 } from "firebase/firestore";
 
 // ============================================================================
@@ -680,17 +680,51 @@ function usePontoDia(uid, dataRef) {
 }
 function usePontoMes(uid, ym) {
   const [m, setM] = useState({});
+
   useEffect(() => {
-    if (!uid) return setM({});
-    const ini = `${ym}-01`, fim = `${ym}-31`;
-    return onSnapshot(
-      query(collection(db, "ponto"), where("uid", "==", uid), where("dataRef", ">=", ini), where("dataRef", "<=", fim)),
-      (s) => setM(Object.fromEntries(s.docs.map((d) => {
-        const dados = pontoComAjuste(d.data());
-        return [dados.dataRef, dados];
-      })))
+    if (!uid) {
+      setM({});
+      return;
+    }
+
+    const datas = diasDoMes(ym);
+    const mapa = {};
+    let ativo = true;
+
+    // Escuta cada documento pelo ID oficial: uid_YYYY-MM-DD.
+    // Assim também encontra correções históricas mesmo que algum campo
+    // interno do documento tenha sido salvo de forma diferente.
+    const cancelar = datas.map((dataRef) =>
+      onSnapshot(
+        doc(db, "ponto", `${uid}_${dataRef}`),
+        (snap) => {
+          if (!ativo) return;
+
+          if (snap.exists()) {
+            const dados = pontoComAjuste({
+              ...snap.data(),
+              dataRef: snap.data()?.dataRef || dataRef,
+              uid: snap.data()?.uid || uid,
+            });
+            mapa[dataRef] = dados;
+          } else {
+            delete mapa[dataRef];
+          }
+
+          setM({ ...mapa });
+        },
+        () => {
+          // Mantém os demais dias carregados mesmo que um documento falhe.
+        }
+      )
     );
+
+    return () => {
+      ativo = false;
+      cancelar.forEach((fn) => fn());
+    };
   }, [uid, ym]);
+
   return m;
 }
 
@@ -699,47 +733,105 @@ function usePontoMes(uid, ym) {
 // sistema (para quem já tinha crédito/débito antes de começar a bater ponto).
 // Retorna { carregando, saldoAcumulado, ateMes, saldoInicial }.
 export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
-  const [r, setR] = useState({ carregando: true, saldoAcumulado: 0, ateMes: ymAte, saldoInicial: 0 });
+  const [r, setR] = useState({
+    carregando: true,
+    saldoAcumulado: 0,
+    ateMes: ymAte,
+    saldoInicial: 0,
+  });
+
   useEffect(() => {
     if (!uid || !cfg) return;
+
     let vivo = true;
+
     (async () => {
       setR((x) => ({ ...x, carregando: true }));
-      const inicial = num(func?.saldoInicialMin) || 0; // minutos; positivo = crédito
-      // Todas as marcações do funcionário até o fim do mês pedido
-      const s = await getDocs(query(
-        collection(db, "ponto"),
-        where("uid", "==", uid),
-        where("dataRef", "<=", ymAte === mesRef() ? hojeISO() : `${ymAte}-31`),
-      ));
-      const porMes = {};
+
+      const inicial = num(func?.saldoInicialMin) || 0;
       const admissaoISO = normalizarDataISO(func?.admissao);
 
-      const registros = s.docs
-        .map((d) => pontoComAjuste(d.data()))
-        .filter((x) => x?.dataRef)
-        .sort((a, b) => a.dataRef.localeCompare(b.dataRef));
+      const fim = ymAte === mesRef() ? hojeISO() : `${ymAte}-31`;
 
-      const primeiroRegistro = registros[0]?.dataRef || "";
-      const inicioEfetivo = [admissaoISO, primeiroRegistro]
-        .filter(Boolean)
-        .sort()
-        .slice(-1)[0] || "";
+      // Para não criar saldo antes da implantação, começa na admissão.
+      // Na ausência dela, começa no primeiro dia do mês solicitado.
+      const inicio = admissaoISO || `${ymAte}-01`;
 
-      registros.forEach((x) => {
-        if (inicioEfetivo && x.dataRef < inicioEfetivo) return;
-        (porMes[mesRef(x.dataRef)] ||= {})[x.dataRef] = x;
+      const datas = [];
+      let cursor = dataDe(inicio);
+      const limite = dataDe(fim);
+
+      while (cursor <= limite) {
+        const dataRef =
+          `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+        datas.push(dataRef);
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      // Busca cada dia diretamente pelo ID do documento.
+      // Isso garante que os ajustes lançados pela coordenação sejam encontrados.
+      const snaps = await Promise.all(
+        datas.map((dataRef) => getDoc(doc(db, "ponto", `${uid}_${dataRef}`)))
+      );
+
+      const porMes = {};
+
+      snaps.forEach((snap, i) => {
+        if (!snap.exists()) return;
+
+        const dataRef = datas[i];
+        const dados = pontoComAjuste({
+          ...snap.data(),
+          dataRef: snap.data()?.dataRef || dataRef,
+          uid: snap.data()?.uid || uid,
+        });
+
+        (porMes[mesRef(dataRef)] ||= {})[dataRef] = dados;
       });
 
       let acc = inicial;
-      Object.keys(porMes).sort().forEach((ym) => {
-        if (inicioEfetivo && `${ym}-31` < inicioEfetivo) return;
-        acc += calcularMes({ ym, dias: porMes[ym], func, cfg }).t.saldo;
+
+      // Calcula todos os meses desde a admissão, incluindo dias sem marcação,
+      // mas nunca antes da data de admissão e nunca depois de hoje.
+      const meses = [...new Set(datas.map((d) => mesRef(d)))].sort();
+
+      meses.forEach((ym) => {
+        acc += calcularMes({
+          ym,
+          dias: porMes[ym] || {},
+          func: {
+            ...func,
+            admissao: admissaoISO || inicio,
+          },
+          cfg,
+        }).t.saldo;
       });
-      if (vivo) setR({ carregando: false, saldoAcumulado: acc, ateMes: ymAte, saldoInicial: inicial });
-    })().catch(() => vivo && setR((x) => ({ ...x, carregando: false })));
-    return () => { vivo = false; };
-  }, [uid, func?.saldoInicialMin, func?.regime, cfg, ymAte]);
+
+      if (vivo) {
+        setR({
+          carregando: false,
+          saldoAcumulado: acc,
+          ateMes: ymAte,
+          saldoInicial: inicial,
+        });
+      }
+    })().catch((erro) => {
+      console.error("Erro ao calcular banco de horas:", erro);
+      if (vivo) setR((x) => ({ ...x, carregando: false }));
+    });
+
+    return () => {
+      vivo = false;
+    };
+  }, [
+    uid,
+    func?.saldoInicialMin,
+    func?.admissao,
+    func?.regime,
+    cfg,
+    ymAte,
+  ]);
+
   return r;
 }
 
