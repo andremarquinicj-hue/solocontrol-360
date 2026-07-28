@@ -749,7 +749,7 @@ export function TelaPonto({ perfil }) {
         </div>
       </Cartao>
 
-      <CardBanco uid={perfil.uid} func={func} cfg={cfg} />
+      <CardBanco uid={perfil.uid} func={func} cfg={cfg} mes={mes} ym={ym} />
 
       {proximo ? (
         <Btn tom={proximo.id === "saida" ? "red" : proximo.id === "saida_almoco" ? "cinza" : "ok"}
@@ -819,36 +819,70 @@ export function TelaPonto({ perfil }) {
 
 // Card de saldo (banco de horas) — mostra ao funcionário se está positivo ou
 // negativo, somando todos os meses. Card de destaque no topo do cartão de ponto.
-function CardBanco({ uid, func, cfg }) {
-  const b = useBancoHoras(uid, func, cfg);
+function CardBanco({ uid, func, cfg, mes, ym }) {
+  const banco = useBancoHoras(uid, func, cfg, ym);
+  const resumoMes = useMemo(() => {
+    if (!cfg || !func) return null;
+    return calcularMes({ ym, dias: mes || {}, func, cfg }).t;
+  }, [ym, mes, func, cfg]);
+
   if (!cfg) return null;
-  const positivo = b.saldoAcumulado >= 0;
-  const zerado = Math.abs(b.saldoAcumulado) < 1;
-  const cor = zerado ? C.mut : positivo ? C.ok : C.red;
-  const bg = zerado ? C.grayBg : positivo ? C.okBg : C.redBg;
+
+  const saldoMes = resumoMes?.saldo || 0;
+  const positivoMes = saldoMes >= 0;
+  const zeradoMes = Math.abs(saldoMes) < 1;
+
+  const positivoBanco = banco.saldoAcumulado >= 0;
+  const zeradoBanco = Math.abs(banco.saldoAcumulado) < 1;
+
+  const corMes = zeradoMes ? C.mut : positivoMes ? C.ok : C.red;
+  const bgMes = zeradoMes ? C.grayBg : positivoMes ? C.okBg : C.redBg;
+
+  const corBanco = zeradoBanco ? C.mut : positivoBanco ? C.ok : C.red;
+
   return (
-    <Cartao style={{ background: bg, borderColor: cor + "44" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <Cartao style={{ background: bgMes, borderColor: corMes + "44" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
+        Meu saldo de horas
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.5 }}>Banco de horas</div>
-          <div style={{ fontSize: 12.5, color: C.mut, marginTop: 3 }}>
-            {b.carregando ? "Somando os meses…" : zerado ? "Você está em dia" : positivo ? "Saldo a seu favor" : "Horas a compensar"}
+          <div style={{ fontSize: 12, color: C.mut }}>Saldo do mês</div>
+          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 27, color: corMes, lineHeight: 1.1, marginTop: 3 }}>
+            {positivoMes && !zeradoMes ? "+" : ""}{hhmm(saldoMes)}
+          </div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: corMes, marginTop: 3 }}>
+            {zeradoMes ? "Em dia" : positivoMes ? "Horas a favor" : "Horas negativas"}
           </div>
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 30, color: cor, lineHeight: 1 }}>
-            {b.carregando ? "…" : `${positivo && !zerado ? "+" : ""}${hhmm(b.saldoAcumulado)}`}
+
+        <div style={{ borderLeft: `1px solid ${C.line}`, paddingLeft: 12 }}>
+          <div style={{ fontSize: 12, color: C.mut }}>Banco acumulado</div>
+          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 27, color: corBanco, lineHeight: 1.1, marginTop: 3 }}>
+            {banco.carregando
+              ? "…"
+              : `${positivoBanco && !zeradoBanco ? "+" : ""}${hhmm(banco.saldoAcumulado)}`}
           </div>
-          {!b.carregando && !zerado && (
-            <div style={{ fontSize: 11, fontWeight: 700, color: cor, marginTop: 2 }}>
-              {positivo ? "▲ positivo" : "▼ negativo"}
-            </div>
-          )}
+          <div style={{ fontSize: 11, fontWeight: 700, color: corBanco, marginTop: 3 }}>
+            {banco.carregando
+              ? "Calculando…"
+              : zeradoBanco
+                ? "Sem saldo acumulado"
+                : positivoBanco
+                  ? "Crédito acumulado"
+                  : "Débito acumulado"}
+          </div>
         </div>
       </div>
-      {!b.carregando && b.saldoInicial !== 0 && (
-        <div style={{ fontSize: 11, color: C.mut, marginTop: 8, borderTop: `1px dashed ${cor}33`, paddingTop: 6 }}>
-          Inclui saldo inicial de {b.saldoInicial > 0 ? "+" : ""}{hhmm(b.saldoInicial)} lançado na adesão ao sistema.
+
+      <div style={{ fontSize: 11, color: C.mut, marginTop: 10, borderTop: `1px dashed ${C.line}`, paddingTop: 7 }}>
+        O saldo considera a jornada cadastrada, as marcações, correções da coordenação e a data de admissão.
+      </div>
+
+      {!banco.carregando && banco.saldoInicial !== 0 && (
+        <div style={{ fontSize: 11, color: C.mut, marginTop: 5 }}>
+          Inclui saldo inicial de {banco.saldoInicial > 0 ? "+" : ""}{hhmm(banco.saldoInicial)}.
         </div>
       )}
     </Cartao>
