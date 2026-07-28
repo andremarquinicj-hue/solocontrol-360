@@ -682,37 +682,103 @@ function useFuncionarioDoPerfil(perfil) {
     let cancelar = () => {};
 
     (async () => {
-      const direto = await getDoc(doc(db, "funcionarios", perfil.uid));
+      let fichaDoc = null;
 
-      if (direto.exists()) {
-        if (ativo) setFunc({ uid: direto.id, ...direto.data() });
-        cancelar = onSnapshot(doc(db, "funcionarios", direto.id), (snap) => {
-          if (ativo && snap.exists()) setFunc({ uid: snap.id, ...snap.data() });
-        });
-        return;
-      }
-
-      // Caso o UID do login seja diferente do ID da ficha criada pela coordenação,
-      // localiza a ficha pelo e-mail. Essa era a causa de cada tela ler um cartão diferente.
+      // A coordenação pode ter criado a ficha com outro ID de documento.
+      // Por isso, a tela do funcionário procura primeiro pela ficha completa
+      // usando o e-mail do login.
       if (perfil.email) {
-        const busca = await getDocs(query(
-          collection(db, "funcionarios"),
-          where("email", "==", perfil.email)
-        ));
+        const busca = await getDocs(
+          query(
+            collection(db, "funcionarios"),
+            where("email", "==", perfil.email)
+          )
+        );
 
-        const encontrado = busca.docs[0];
-        if (encontrado) {
-          if (ativo) setFunc({ uid: encontrado.id, ...encontrado.data() });
-          cancelar = onSnapshot(doc(db, "funcionarios", encontrado.id), (snap) => {
-            if (ativo && snap.exists()) setFunc({ uid: snap.id, ...snap.data() });
+        if (!busca.empty) {
+          const candidatas = busca.docs.map((d) => {
+            const dados = d.data();
+            const pontos =
+              (dados?.admissao ? 100 : 0) +
+              (dados?.cpf ? 20 : 0) +
+              (dados?.matricula ? 20 : 0) +
+              (dados?.funcao ? 10 : 0) +
+              (dados?.jornadaSemanal ? 5 : 0);
+
+            return { id: d.id, dados, pontos };
           });
-          return;
+
+          candidatas.sort((a, b) => b.pontos - a.pontos);
+          fichaDoc = candidatas[0];
         }
       }
 
-      if (ativo) setFunc({ uid: perfil.uid, semCadastro: true });
-    })().catch(() => {
-      if (ativo) setFunc({ uid: perfil.uid, semCadastro: true });
+      // Usa o documento pelo UID do login apenas quando não houver
+      // uma ficha cadastrada pela coordenação.
+      if (!fichaDoc) {
+        const direto = await getDoc(doc(db, "funcionarios", perfil.uid));
+        if (direto.exists()) {
+          fichaDoc = {
+            id: direto.id,
+            dados: direto.data(),
+          };
+        }
+      }
+
+      if (!fichaDoc) {
+        if (ativo) {
+          setFunc({
+            uid: perfil.uid,
+            pontoUid: perfil.uid,
+            docId: perfil.uid,
+            semCadastro: true,
+          });
+        }
+        return;
+      }
+
+      const publicar = (snap) => {
+        if (!ativo || !snap.exists()) return;
+
+        const dados = snap.data();
+
+        // Usa exatamente o UID guardado na ficha da coordenação.
+        // Se não existir, usa o ID do documento.
+        const pontoUid =
+          dados?.uidFuncionario ||
+          dados?.authUid ||
+          dados?.uid ||
+          snap.id;
+
+        setFunc({
+          ...dados,
+          uid: pontoUid,
+          pontoUid,
+          docId: snap.id,
+        });
+      };
+
+      publicar({
+        exists: () => true,
+        data: () => fichaDoc.dados,
+        id: fichaDoc.id,
+      });
+
+      cancelar = onSnapshot(
+        doc(db, "funcionarios", fichaDoc.id),
+        publicar
+      );
+    })().catch((erro) => {
+      console.error("Erro ao localizar ficha da coordenação:", erro);
+
+      if (ativo) {
+        setFunc({
+          uid: perfil.uid,
+          pontoUid: perfil.uid,
+          docId: perfil.uid,
+          semCadastro: true,
+        });
+      }
     });
 
     return () => {
@@ -723,6 +789,7 @@ function useFuncionarioDoPerfil(perfil) {
 
   return func;
 }
+
 function usePontoDia(uid, dataRef) {
   const [d, setD] = useState(null);
   useEffect(() => {
@@ -930,7 +997,7 @@ async function registrarMarcacao({ perfil, func, tipo, pontoUid }) {
 export function TelaPonto({ perfil }) {
   const cfg = useConfigPessoal();
   const func = useFuncionarioDoPerfil(perfil);
-  const pontoUid = func?.uid || perfil.uid;
+  const pontoUid = func?.pontoUid || func?.uid || perfil.uid;
   const hoje = hojeISO();
   const pd = usePontoDia(pontoUid, hoje);
   const [ym, setYm] = useState(mesRef());
@@ -1180,7 +1247,7 @@ function Comprovante({ m, perfil, func, fechar }) {
 // Espelho resumido do próprio funcionário
 function MeuEspelho({ perfil, func, cfg, ym, setYm, mes }) {
   const { linhas, t } = useMemo(() => calcularMes({ ym, dias: mes, func, cfg }), [ym, mes, func, cfg]);
-  const banco = useBancoHoras(func?.uid || perfil.uid, func, cfg, ym); // acumulado até o mês escolhido
+  const banco = useBancoHoras(func?.pontoUid || func?.uid || perfil.uid, func, cfg, ym); // acumulado até o mês escolhido
   const posMes = t.saldo >= 0, posAcc = banco.saldoAcumulado >= 0;
   return (
     <>
