@@ -36,7 +36,7 @@ import { getAuth, createUserWithEmailAndPassword, signOut } from "firebase/auth"
 import { initializeApp, getApps } from "firebase/app";
 import {
   collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot,
-  query, where, getDocs, getDoc, arrayUnion,
+  query, where, getDocs, arrayUnion,
 } from "firebase/firestore";
 
 // ============================================================================
@@ -66,28 +66,6 @@ export const agoraHM = () => {
 };
 export const agoraISO = () => new Date().toISOString();
 export const fmtBR = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
-export const normalizarDataISO = (valor) => {
-  if (!valor) return "";
-  const s = String(valor).trim();
-
-  // Já está em YYYY-MM-DD.
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-  // Converte DD/MM/YYYY para YYYY-MM-DD.
-  const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
-
-  // Firebase Timestamp ou Date.
-  if (valor?.toDate) {
-    const d = valor.toDate();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  if (valor instanceof Date && !isNaN(valor)) {
-    return `${valor.getFullYear()}-${String(valor.getMonth() + 1).padStart(2, "0")}-${String(valor.getDate()).padStart(2, "0")}`;
-  }
-
-  return "";
-};
 export const fmtDataHora = () => {
   const d = new Date();
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -502,84 +480,13 @@ export function calcularMes({ ym, dias, func, cfg }) {
   const p = cfg?.ponto || CFG_PADRAO.ponto;
   const feriados = Object.fromEntries((cfg?.feriados || []).map((f) => [f.data, f.nome || "Feriado"]));
   const regime = func?.regime || REGIME_PADRAO;
-  const hoje = hojeISO();
-  const admissaoISO = normalizarDataISO(func?.admissao);
-
-  // Usa também o primeiro registro existente no mês como referência.
-  // Isso evita descontar dias anteriores quando a admissão não chegou
-  // corretamente no perfil do funcionário.
-  const primeiroRegistroMes = Object.keys(dias || {})
-    .filter((d) => (dias[d]?.marcacoes?.length || dias[d]?.ajustes?.length || dias[d]?.afastamento))
-    .sort()[0] || "";
-
-  const inicioEfetivo = [admissaoISO, primeiroRegistroMes]
-    .filter(Boolean)
-    .sort()
-    .slice(-1)[0] || "";
-
-  const linhas = diasDoMes(ym).map((d) => {
-    // Dias futuros não entram no saldo, faltas, atrasos ou jornada prevista.
-    if (d > hoje) {
-      const chave = DIA_SEM[dataDe(d).getDay()];
-      return {
-        dataRef: d,
-        chave,
-        feriado: false,
-        afastamento: "Data futura",
-        prevista: 0,
-        trabalhado: 0,
-        intervalo: 0,
-        noturno: 0,
-        pares: [],
-        marcacoes: [],
-        impar: false,
-        extra1: 0,
-        extra2: 0,
-        extraNormal: 0,
-        extraEspecial: 0,
-        debito: 0,
-        tolerado: 0,
-        avisos: [],
-        saldo: 0,
-      };
-    }
-
-    // Dias anteriores à admissão não geram jornada prevista, faltas,
-    // atrasos ou saldo negativo no banco de horas.
-    if (inicioEfetivo && d < inicioEfetivo) {
-      const chave = DIA_SEM[dataDe(d).getDay()];
-      return {
-        dataRef: d,
-        chave,
-        feriado: false,
-        afastamento: "Anterior à admissão",
-        prevista: 0,
-        trabalhado: 0,
-        intervalo: 0,
-        noturno: 0,
-        pares: [],
-        marcacoes: [],
-        impar: false,
-        extra1: 0,
-        extra2: 0,
-        extraNormal: 0,
-        extraEspecial: 0,
-        debito: 0,
-        tolerado: 0,
-        avisos: [],
-        saldo: 0,
-      };
-    }
-
-    return calcularDia({
-      dataRef: d,
-      marcacoes: dias[d]?.marcacoes || [],
-      regime,
-      cfg,
-      feriado: feriados[d],
-      afastamento: dias[d]?.afastamento,
-    });
-  });
+  const linhas = diasDoMes(ym).map((d) => calcularDia({
+    dataRef: d,
+    marcacoes: dias[d]?.marcacoes || [],
+    regime, cfg,
+    feriado: feriados[d],
+    afastamento: dias[d]?.afastamento,
+  }));
 
   const soma = (k) => linhas.reduce((s, l) => s + (l[k] || 0), 0);
   const t = {
@@ -620,23 +527,6 @@ export function calcularMes({ ym, dias, func, cfg }) {
 const brl = (v) => (v == null ? "—" : v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
 
 // ----------------------------------------------------------------------------
-// Ajustes de ponto da coordenação
-// Mantém as marcações originais e usa o último ajuste apenas para cálculo/exibição.
-// ----------------------------------------------------------------------------
-function pontoComAjuste(dados = {}) {
-  const originais = dados.marcacoes || [];
-  const ajustes = dados.ajustes || [];
-  const ultimo = ajustes.length ? ajustes[ajustes.length - 1] : null;
-
-  return {
-    ...dados,
-    marcacoesOriginais: originais,
-    marcacoes: ultimo?.marcacoes ? ultimo.marcacoes : originais,
-    ajusteAtual: ultimo || null,
-  };
-}
-
-// ----------------------------------------------------------------------------
 // Hooks de dados
 // ----------------------------------------------------------------------------
 export function useConfigPessoal() {
@@ -654,18 +544,7 @@ export function useConfigPessoal() {
 export function useFuncionarios(apenasAtivos = false) {
   const [l, setL] = useState([]);
   useEffect(() => onSnapshot(collection(db, "funcionarios"), (s) => {
-    const a = s.docs.map((d) => {
-      const dados = d.data();
-      return {
-        ...dados,
-        docId: d.id,
-        uid: d.id,
-        legacyUid: dados.uid || "",
-        // A chave do ponto pode ser o UID do login, mesmo quando a ficha
-        // administrativa foi criada com outro ID.
-        pontoUid: dados.pontoUid || dados.authUid || d.id,
-      };
-    });
+    const a = s.docs.map((d) => ({ uid: d.id, ...d.data() }));
     a.sort((x, y) => (x.nome || "").localeCompare(y.nome || ""));
     setL(apenasAtivos ? a.filter((f) => f.ativo !== false) : a);
   }), [apenasAtivos]);
@@ -679,210 +558,24 @@ export function useFuncionario(uid) {
   }, [uid]);
   return f;
 }
-
-function idsPontoDoFuncionario(func, uidLogin = "") {
-  return [...new Set([
-    func?.pontoUid,
-    func?.authUid,
-    uidLogin,
-    func?.docId,
-    func?.uid,
-    func?.legacyUid,
-    func?.uidFuncionario,
-  ].filter(Boolean))];
-}
-
-function escolherRegistroPonto(registros = []) {
-  if (!registros.length) return null;
-
-  return [...registros].sort((a, b) => {
-    const pa = ((a.ajustes?.length || 0) * 100000) + (a.marcacoes?.length || 0);
-    const pb = ((b.ajustes?.length || 0) * 100000) + (b.marcacoes?.length || 0);
-    if (pa !== pb) return pb - pa;
-    return String(b.atualizadoEm || "").localeCompare(String(a.atualizadoEm || ""));
-  })[0];
-}
-
-function useFuncionarioDoPerfil(perfil) {
-  const [func, setFunc] = useState(null);
-
-  useEffect(() => {
-    if (!perfil?.uid) {
-      setFunc(null);
-      return;
-    }
-
-    let ativo = true;
-    let cancelar = () => {};
-
-    const norm = (v = "") =>
-      String(v)
-        .trim()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase();
-
-    (async () => {
-      const snap = await getDocs(collection(db, "funcionarios"));
-
-      const emailLogin = norm(perfil.email);
-      const nomeLogin = norm(perfil.nome);
-
-      const candidatas = snap.docs.map((d) => {
-        const dados = d.data();
-        const emailFicha = norm(dados.email);
-        const nomeFicha = norm(dados.nome);
-
-        let vinculo = 0;
-
-        if (d.id === perfil.uid) vinculo += 500;
-        if (dados.authUid === perfil.uid) vinculo += 1000;
-        if (dados.pontoUid === perfil.uid) vinculo += 900;
-        if (dados.uidFuncionario === perfil.uid) vinculo += 850;
-        if (emailLogin && emailFicha && emailLogin === emailFicha) vinculo += 800;
-        if (nomeLogin && nomeFicha && nomeLogin === nomeFicha) vinculo += 300;
-
-        const completude =
-          (dados.admissao ? 120 : 0) +
-          (dados.regime ? 80 : 0) +
-          (dados.cpf ? 30 : 0) +
-          (dados.matricula ? 30 : 0) +
-          (dados.funcao ? 20 : 0) +
-          (dados.salario ? 10 : 0);
-
-        return { id: d.id, dados, pontos: vinculo + completude, vinculo };
-      });
-
-      candidatas.sort((a, b) => b.pontos - a.pontos);
-      const escolhida = candidatas.find((c) => c.vinculo > 0);
-
-      if (!escolhida) {
-        if (ativo) {
-          setFunc({
-            uid: perfil.uid,
-            pontoUid: perfil.uid,
-            authUid: perfil.uid,
-            docId: perfil.uid,
-            nome: perfil.nome || "",
-            email: perfil.email || "",
-            semCadastro: true,
-          });
-        }
-        return;
-      }
-
-      const publicar = (docSnap) => {
-        if (!ativo || !docSnap.exists()) return;
-
-        const dados = docSnap.data();
-        const pontoUid = perfil.uid;
-
-        setFunc({
-          ...dados,
-          uid: docSnap.id,
-          docId: docSnap.id,
-          authUid: perfil.uid,
-          pontoUid,
-          legacyUid: dados.uid || "",
-        });
-
-        setDoc(doc(db, "funcionarios", docSnap.id), {
-          authUid: perfil.uid,
-          pontoUid,
-          email: dados.email || perfil.email || "",
-          nome: dados.nome || perfil.nome || "",
-          vinculoPontoAtualizadoEm: agoraISO(),
-        }, { merge: true }).catch((erro) =>
-          console.error("Erro ao vincular ficha ao login:", erro)
-        );
-      };
-
-      cancelar = onSnapshot(
-        doc(db, "funcionarios", escolhida.id),
-        publicar,
-        (erro) => console.error("Erro ao acompanhar ficha:", erro)
-      );
-    })().catch((erro) => {
-      console.error("Erro ao localizar ficha completa:", erro);
-      if (ativo) {
-        setFunc({
-          uid: perfil.uid,
-          pontoUid: perfil.uid,
-          authUid: perfil.uid,
-          docId: perfil.uid,
-          nome: perfil.nome || "",
-          email: perfil.email || "",
-          semCadastro: true,
-        });
-      }
-    });
-
-    return () => {
-      ativo = false;
-      cancelar();
-    };
-  }, [perfil?.uid, perfil?.email, perfil?.nome]);
-
-  return func;
-}
-
 function usePontoDia(uid, dataRef) {
   const [d, setD] = useState(null);
   useEffect(() => {
     if (!uid) return setD(null);
-    return onSnapshot(doc(db, "ponto", `${uid}_${dataRef}`), (s) =>
-      setD(s.exists() ? pontoComAjuste(s.data()) : { marcacoes: [], marcacoesOriginais: [], ajustes: [] })
-    );
+    return onSnapshot(doc(db, "ponto", `${uid}_${dataRef}`), (s) => setD(s.exists() ? s.data() : { marcacoes: [] }));
   }, [uid, dataRef]);
   return d;
 }
 function usePontoMes(uid, ym) {
   const [m, setM] = useState({});
-
   useEffect(() => {
-    if (!uid) {
-      setM({});
-      return;
-    }
-
-    const datas = diasDoMes(ym);
-    const mapa = {};
-    let ativo = true;
-
-    // Escuta cada documento pelo ID oficial: uid_YYYY-MM-DD.
-    // Assim também encontra correções históricas mesmo que algum campo
-    // interno do documento tenha sido salvo de forma diferente.
-    const cancelar = datas.map((dataRef) =>
-      onSnapshot(
-        doc(db, "ponto", `${uid}_${dataRef}`),
-        (snap) => {
-          if (!ativo) return;
-
-          if (snap.exists()) {
-            const dados = pontoComAjuste({
-              ...snap.data(),
-              dataRef: snap.data()?.dataRef || dataRef,
-              uid: snap.data()?.uid || uid,
-            });
-            mapa[dataRef] = dados;
-          } else {
-            delete mapa[dataRef];
-          }
-
-          setM({ ...mapa });
-        },
-        () => {
-          // Mantém os demais dias carregados mesmo que um documento falhe.
-        }
-      )
+    if (!uid) return setM({});
+    const ini = `${ym}-01`, fim = `${ym}-31`;
+    return onSnapshot(
+      query(collection(db, "ponto"), where("uid", "==", uid), where("dataRef", ">=", ini), where("dataRef", "<=", fim)),
+      (s) => setM(Object.fromEntries(s.docs.map((d) => [d.data().dataRef, d.data()])))
     );
-
-    return () => {
-      ativo = false;
-      cancelar.forEach((fn) => fn());
-    };
   }, [uid, ym]);
-
   return m;
 }
 
@@ -891,143 +584,29 @@ function usePontoMes(uid, ym) {
 // sistema (para quem já tinha crédito/débito antes de começar a bater ponto).
 // Retorna { carregando, saldoAcumulado, ateMes, saldoInicial }.
 export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
-  const [r, setR] = useState({
-    carregando: true,
-    saldoAcumulado: 0,
-    ateMes: ymAte,
-    saldoInicial: 0,
-  });
-
+  const [r, setR] = useState({ carregando: true, saldoAcumulado: 0, ateMes: ymAte, saldoInicial: 0 });
   useEffect(() => {
     if (!uid || !cfg) return;
-
     let vivo = true;
-
     (async () => {
       setR((x) => ({ ...x, carregando: true }));
-
-      const inicial = num(func?.saldoInicialMin) || 0;
-      const admissaoISO = normalizarDataISO(func?.admissao);
-
-      const fim = ymAte === mesRef() ? hojeISO() : `${ymAte}-31`;
-
-      // Para não criar saldo antes da implantação, começa na admissão.
-      // Na ausência dela, começa no primeiro dia do mês solicitado.
-      const inicio = admissaoISO || `${ymAte}-01`;
-
-      const datas = [];
-      let cursor = dataDe(inicio);
-      const limite = dataDe(fim);
-
-      while (cursor <= limite) {
-        const dataRef =
-          `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
-        datas.push(dataRef);
-        cursor.setDate(cursor.getDate() + 1);
-      }
-
-      // Busca cada dia diretamente pelo ID do documento.
-      // Isso garante que os ajustes lançados pela coordenação sejam encontrados.
-      const ids = idsPontoDoFuncionario(func, uid);
-      const cpfFicha = String(func?.cpf || "").replace(/\D/g, "");
-      const normalizar = (v = "") =>
-        String(v)
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .replace(/\W+/g, "")
-          .toLowerCase();
-      const matriculaFicha = normalizar(func?.matricula || "");
-      const nomeFicha = normalizar(func?.nome || "");
-
-      const snapPonto = await getDocs(
-        query(
-          collection(db, "ponto"),
-          where("dataRef", ">=", inicio),
-          where("dataRef", "<=", fim)
-        )
-      );
-
-      const candidatosPorDia = {};
-
-      snapPonto.docs.forEach((docSnap) => {
-        const bruto = docSnap.data();
-        const cpf = String(bruto?.cpf || "").replace(/\D/g, "");
-        const matricula = normalizar(bruto?.matricula || "");
-        const nome = normalizar(bruto?.nome || "");
-
-        const pertence =
-          ids.includes(bruto?.uid) ||
-          ids.some((id) => docSnap.id.startsWith(`${id}_`)) ||
-          (cpfFicha && cpf && cpfFicha === cpf) ||
-          (matriculaFicha && matricula && matriculaFicha === matricula) ||
-          (nomeFicha && nome && nomeFicha === nome);
-
-        if (!pertence || !bruto?.dataRef) return;
-
-        (candidatosPorDia[bruto.dataRef] ||= []).push(
-          pontoComAjuste({
-            ...bruto,
-            dataRef: bruto.dataRef,
-            documentoPonto: docSnap.id,
-          })
-        );
-      });
-
+      const inicial = num(func?.saldoInicialMin) || 0; // minutos; positivo = crédito
+      // Todas as marcações do funcionário até o fim do mês pedido
+      const s = await getDocs(query(
+        collection(db, "ponto"),
+        where("uid", "==", uid),
+        where("dataRef", "<=", `${ymAte}-31`),
+      ));
       const porMes = {};
-
-      Object.entries(candidatosPorDia).forEach(([dataRef, candidatos]) => {
-        const melhor = escolherRegistroPonto(candidatos);
-        if (!melhor) return;
-        (porMes[mesRef(dataRef)] ||= {})[dataRef] = melhor;
-      });
-
+      s.docs.forEach((d) => { const x = d.data(); (porMes[mesRef(x.dataRef)] ||= {})[x.dataRef] = x; });
       let acc = inicial;
-
-      // Calcula todos os meses desde a admissão, incluindo dias sem marcação,
-      // mas nunca antes da data de admissão e nunca depois de hoje.
-      const meses = [...new Set(datas.map((d) => mesRef(d)))].sort();
-
-      meses.forEach((ym) => {
-        acc += calcularMes({
-          ym,
-          dias: porMes[ym] || {},
-          func: {
-            ...func,
-            admissao: admissaoISO || inicio,
-          },
-          cfg,
-        }).t.saldo;
+      Object.keys(porMes).sort().forEach((ym) => {
+        acc += calcularMes({ ym, dias: porMes[ym], func, cfg }).t.saldo;
       });
-
-      if (vivo) {
-        setR({
-          carregando: false,
-          saldoAcumulado: acc,
-          ateMes: ymAte,
-          saldoInicial: inicial,
-        });
-      }
-    })().catch((erro) => {
-      console.error("Erro ao calcular banco de horas:", erro);
-      if (vivo) setR((x) => ({ ...x, carregando: false }));
-    });
-
-    return () => {
-      vivo = false;
-    };
-  }, [
-    uid,
-    func?.saldoInicialMin,
-    func?.admissao,
-    func?.regime,
-    func?.pontoUid,
-    func?.authUid,
-    func?.docId,
-    func?.legacyUid,
-    cfg,
-    ymAte,
-  ]);
-
+      if (vivo) setR({ carregando: false, saldoAcumulado: acc, ateMes: ymAte, saldoInicial: inicial });
+    })().catch(() => vivo && setR((x) => ({ ...x, carregando: false })));
+    return () => { vivo = false; };
+  }, [uid, func?.saldoInicialMin, func?.regime, cfg, ymAte]);
   return r;
 }
 
@@ -1041,7 +620,7 @@ export function useBancoHoras(uid, func, cfg, ymAte = mesRef()) {
 // contador da nuvem com um contador de sessão em memória. Assim dois toques
 // rápidos recebem números diferentes, e funciona também offline.
 let _nsrSessao = 0;
-async function registrarMarcacao({ perfil, func, tipo, pontoUid }) {
+async function registrarMarcacao({ perfil, func, tipo }) {
   // ↓ tudo isto roda de forma síncrona, antes de qualquer await:
   const base = Math.max(func?.nsr || 0, _nsrSessao);
   const nsr = base + 1;
@@ -1055,149 +634,14 @@ async function registrarMarcacao({ perfil, func, tipo, pontoUid }) {
     origem: "PWA Solocontrol 360",
     disp: (navigator.userAgent || "").slice(0, 90),
   };
-  setDoc(doc(db, "ponto", `${pontoUid}_${dataRef}`), {
-    uid: pontoUid, nome: perfil.nome, dataRef,
+  setDoc(doc(db, "ponto", `${perfil.uid}_${dataRef}`), {
+    uid: perfil.uid, nome: perfil.nome, dataRef,
     matricula: func?.matricula || "", cpf: func?.cpf || "",
     marcacoes: arrayUnion(marca), atualizadoEm: agoraISO(),
   }, { merge: true }).catch(() => {});
   // grava o NSR efetivamente usado (não increment, para bater com o exibido)
-  updateDoc(doc(db, "funcionarios", func?.docId || pontoUid), {
-    nsr,
-    ultimaMarcacao: em,
-    authUid: perfil.uid,
-    pontoUid,
-  }).catch(() => {});
+  updateDoc(doc(db, "funcionarios", perfil.uid), { nsr, ultimaMarcacao: em }).catch(() => {});
   return marca;
-}
-
-
-function usePontoDiaUnificado(func, uidLogin, dataRef) {
-  const ids = useMemo(
-    () => idsPontoDoFuncionario(func, uidLogin),
-    [func?.pontoUid, func?.authUid, func?.docId, func?.uid, func?.legacyUid, func?.uidFuncionario, uidLogin]
-  );
-  const [registro, setRegistro] = useState(null);
-
-  useEffect(() => {
-    if (!ids.length) {
-      setRegistro({ marcacoes: [], marcacoesOriginais: [], ajustes: [] });
-      return;
-    }
-
-    const encontrados = {};
-    const cancelar = ids.map((id) =>
-      onSnapshot(doc(db, "ponto", `${id}_${dataRef}`), (snap) => {
-        if (snap.exists()) {
-          encontrados[id] = pontoComAjuste({
-            ...snap.data(),
-            dataRef: snap.data()?.dataRef || dataRef,
-            uid: snap.data()?.uid || id,
-            documentoPonto: snap.id,
-          });
-        } else {
-          delete encontrados[id];
-        }
-
-        setRegistro(
-          escolherRegistroPonto(Object.values(encontrados)) ||
-          { marcacoes: [], marcacoesOriginais: [], ajustes: [] }
-        );
-      })
-    );
-
-    return () => cancelar.forEach((fn) => fn());
-  }, [ids.join("|"), dataRef]);
-
-  return registro;
-}
-
-function usePontoMesUnificado(func, uidLogin, ym) {
-  const ids = useMemo(
-    () => idsPontoDoFuncionario(func, uidLogin),
-    [func?.pontoUid, func?.authUid, func?.docId, func?.uid, func?.legacyUid, func?.uidFuncionario, uidLogin]
-  );
-  const [mes, setMes] = useState({});
-
-  useEffect(() => {
-    if (!func) {
-      setMes({});
-      return;
-    }
-
-    const normalizar = (v = "") =>
-      String(v)
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/\W+/g, "")
-        .toLowerCase();
-
-    const cpfFicha = String(func?.cpf || "").replace(/\D/g, "");
-    const matriculaFicha = normalizar(func?.matricula || "");
-    const nomeFicha = normalizar(func?.nome || "");
-    const registros = {};
-
-    const pertence = (docSnap, bruto) => {
-      const cpf = String(bruto?.cpf || "").replace(/\D/g, "");
-      const matricula = normalizar(bruto?.matricula || "");
-      const nome = normalizar(bruto?.nome || "");
-
-      return (
-        ids.includes(bruto?.uid) ||
-        ids.some((id) => docSnap.id.startsWith(`${id}_`)) ||
-        (cpfFicha && cpf && cpfFicha === cpf) ||
-        (matriculaFicha && matricula && matriculaFicha === matricula) ||
-        (nomeFicha && nome && nomeFicha === nome)
-      );
-    };
-
-    const publicar = () => {
-      const mapa = {};
-      Object.values(registros).forEach((item) => {
-        if (!item?.dataRef) return;
-        const atual = mapa[item.dataRef];
-        const melhor = escolherRegistroPonto(atual ? [atual, item] : [item]);
-        mapa[item.dataRef] = melhor;
-      });
-      setMes(mapa);
-    };
-
-    const qMes = query(
-      collection(db, "ponto"),
-      where("dataRef", ">=", `${ym}-01`),
-      where("dataRef", "<=", `${ym}-31`)
-    );
-
-    const cancelarMes = onSnapshot(
-      qMes,
-      (snap) => {
-        Object.keys(registros).forEach((k) => delete registros[k]);
-
-        snap.docs.forEach((docSnap) => {
-          const bruto = docSnap.data();
-          if (!pertence(docSnap, bruto)) return;
-
-          registros[docSnap.id] = pontoComAjuste({
-            ...bruto,
-            dataRef: bruto.dataRef,
-            documentoPonto: docSnap.id,
-          });
-        });
-
-        publicar();
-      },
-      (erro) => console.error("Erro ao ouvir registros do mês:", erro)
-    );
-
-    return () => cancelarMes();
-  }, [
-    ids.join("|"),
-    func?.cpf,
-    func?.matricula,
-    func?.nome,
-    ym,
-  ]);
-
-  return mes;
 }
 
 // ============================================================================
@@ -1205,12 +649,11 @@ function usePontoMesUnificado(func, uidLogin, ym) {
 // ============================================================================
 export function TelaPonto({ perfil }) {
   const cfg = useConfigPessoal();
-  const func = useFuncionarioDoPerfil(perfil);
-  const pontoUid = func?.pontoUid || perfil.uid;
+  const func = useFuncionario(perfil.uid);
   const hoje = hojeISO();
-  const pd = usePontoDiaUnificado(func, perfil.uid, hoje);
+  const pd = usePontoDia(perfil.uid, hoje);
   const [ym, setYm] = useState(mesRef());
-  const mes = usePontoMesUnificado(func, perfil.uid, ym);
+  const mes = usePontoMes(perfil.uid, ym);
   const [comprovante, setComprovante] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const [verMes, setVerMes] = useState(false);
@@ -1225,7 +668,7 @@ export function TelaPonto({ perfil }) {
   const bater = async (tipo) => {
     setOcupado(true);
     try {
-      const m = await registrarMarcacao({ perfil, func, tipo, pontoUid });
+      const m = await registrarMarcacao({ perfil, func, tipo });
       setComprovante(m);
     } finally { setOcupado(false); }
   };
@@ -1254,7 +697,7 @@ export function TelaPonto({ perfil }) {
         </div>
       </Cartao>
 
-      <CardBanco uid={pontoUid} func={func} cfg={cfg} mes={mes} ym={ym} />
+      <CardBanco uid={perfil.uid} func={func} cfg={cfg} />
 
       {proximo ? (
         <Btn tom={proximo.id === "saida" ? "red" : proximo.id === "saida_almoco" ? "cinza" : "ok"}
@@ -1324,81 +767,36 @@ export function TelaPonto({ perfil }) {
 
 // Card de saldo (banco de horas) — mostra ao funcionário se está positivo ou
 // negativo, somando todos os meses. Card de destaque no topo do cartão de ponto.
-function CardBanco({ uid, func, cfg, mes, ym }) {
-  const bancoCalculado = useBancoHoras(uid, func, cfg, ym);
-  const resumoMes = useMemo(() => {
-    if (!cfg || !func) return null;
-    return calcularMes({ ym, dias: mes || {}, func, cfg }).t;
-  }, [ym, mes, func, cfg]);
-
-  const banco = useMemo(() => {
-    const saldoMesAtual = resumoMes?.saldo || 0;
-    return {
-      ...bancoCalculado,
-      saldoAcumulado:
-        bancoCalculado.carregando || bancoCalculado.saldoAcumulado === 0
-          ? saldoMesAtual
-          : bancoCalculado.saldoAcumulado,
-    };
-  }, [bancoCalculado, resumoMes?.saldo]);
-
+function CardBanco({ uid, func, cfg }) {
+  const b = useBancoHoras(uid, func, cfg);
   if (!cfg) return null;
-
-  const saldoMes = resumoMes?.saldo || 0;
-  const positivoMes = saldoMes >= 0;
-  const zeradoMes = Math.abs(saldoMes) < 1;
-
-  const positivoBanco = banco.saldoAcumulado >= 0;
-  const zeradoBanco = Math.abs(banco.saldoAcumulado) < 1;
-
-  const corMes = zeradoMes ? C.mut : positivoMes ? C.ok : C.red;
-  const bgMes = zeradoMes ? C.grayBg : positivoMes ? C.okBg : C.redBg;
-
-  const corBanco = zeradoBanco ? C.mut : positivoBanco ? C.ok : C.red;
-
+  const positivo = b.saldoAcumulado >= 0;
+  const zerado = Math.abs(b.saldoAcumulado) < 1;
+  const cor = zerado ? C.mut : positivo ? C.ok : C.red;
+  const bg = zerado ? C.grayBg : positivo ? C.okBg : C.redBg;
   return (
-    <Cartao style={{ background: bgMes, borderColor: corMes + "44" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
-        Meu saldo de horas
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+    <Cartao style={{ background: bg, borderColor: cor + "44" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <div style={{ fontSize: 12, color: C.mut }}>Saldo do mês</div>
-          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 27, color: corMes, lineHeight: 1.1, marginTop: 3 }}>
-            {positivoMes && !zeradoMes ? "+" : ""}{hhmm(saldoMes)}
-          </div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: corMes, marginTop: 3 }}>
-            {zeradoMes ? "Em dia" : positivoMes ? "Horas a favor" : "Horas negativas"}
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.5 }}>Banco de horas</div>
+          <div style={{ fontSize: 12.5, color: C.mut, marginTop: 3 }}>
+            {b.carregando ? "Somando os meses…" : zerado ? "Você está em dia" : positivo ? "Saldo a seu favor" : "Horas a compensar"}
           </div>
         </div>
-
-        <div style={{ borderLeft: `1px solid ${C.line}`, paddingLeft: 12 }}>
-          <div style={{ fontSize: 12, color: C.mut }}>Banco acumulado</div>
-          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 27, color: corBanco, lineHeight: 1.1, marginTop: 3 }}>
-            {banco.carregando
-              ? "…"
-              : `${positivoBanco && !zeradoBanco ? "+" : ""}${hhmm(banco.saldoAcumulado)}`}
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 30, color: cor, lineHeight: 1 }}>
+            {b.carregando ? "…" : `${positivo && !zerado ? "+" : ""}${hhmm(b.saldoAcumulado)}`}
           </div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: corBanco, marginTop: 3 }}>
-            {banco.carregando
-              ? "Calculando…"
-              : zeradoBanco
-                ? "Sem saldo acumulado"
-                : positivoBanco
-                  ? "Crédito acumulado"
-                  : "Débito acumulado"}
-          </div>
+          {!b.carregando && !zerado && (
+            <div style={{ fontSize: 11, fontWeight: 700, color: cor, marginTop: 2 }}>
+              {positivo ? "▲ positivo" : "▼ negativo"}
+            </div>
+          )}
         </div>
       </div>
-
-      <div style={{ fontSize: 11, color: C.mut, marginTop: 10, borderTop: `1px dashed ${C.line}`, paddingTop: 7 }}>
-        O saldo considera a jornada cadastrada, as marcações, correções da coordenação e a data de admissão.
-      </div>
-
-      {!banco.carregando && banco.saldoInicial !== 0 && (
-        <div style={{ fontSize: 11, color: C.mut, marginTop: 5 }}>
-          Inclui saldo inicial de {banco.saldoInicial > 0 ? "+" : ""}{hhmm(banco.saldoInicial)}.
+      {!b.carregando && b.saldoInicial !== 0 && (
+        <div style={{ fontSize: 11, color: C.mut, marginTop: 8, borderTop: `1px dashed ${cor}33`, paddingTop: 6 }}>
+          Inclui saldo inicial de {b.saldoInicial > 0 ? "+" : ""}{hhmm(b.saldoInicial)} lançado na adesão ao sistema.
         </div>
       )}
     </Cartao>
@@ -1467,7 +865,7 @@ function Comprovante({ m, perfil, func, fechar }) {
 // Espelho resumido do próprio funcionário
 function MeuEspelho({ perfil, func, cfg, ym, setYm, mes }) {
   const { linhas, t } = useMemo(() => calcularMes({ ym, dias: mes, func, cfg }), [ym, mes, func, cfg]);
-  const banco = useBancoHoras(func?.pontoUid || func?.uid || perfil.uid, func, cfg, ym); // acumulado até o mês escolhido
+  const banco = useBancoHoras(perfil.uid, func, cfg, ym); // acumulado até o mês escolhido
   const posMes = t.saldo >= 0, posAcc = banco.saldoAcumulado >= 0;
   return (
     <>
@@ -1674,7 +1072,7 @@ function CadastroFuncionarios({ perfil }) {
 function FormNovoFuncionario({ perfil, aoFechar }) {
   const [f, setF] = useState({
     nome: "", email: "", senha: "", cpf: "", matricula: "", funcao: "",
-    papel: "funcionario", pontoAtivo: true, admissao: hojeISO(), salario: "",
+    papel: "funcionario", pontoAtivo: true, despesasAtivo: false, admissao: hojeISO(), salario: "",
     aso: "", asoTipo: "Admissional", epi: "",
   });
   const [msg, setMsg] = useState("");
@@ -1692,13 +1090,13 @@ function FormNovoFuncionario({ perfil, aoFechar }) {
       const uid = cred.user.uid;
       await setDoc(doc(db, "usuarios", uid), {
         nome: f.nome.trim(), email: f.email.trim(), papel: f.papel,
-        ponto: !!f.pontoAtivo, obraId: "", ativo: true,
+        ponto: !!f.pontoAtivo, despesas: !!f.despesasAtivo, obraId: "", ativo: true,
         criadoEm: agoraISO(), criadoPor: perfil.nome,
       });
       await setDoc(doc(db, "funcionarios", uid), {
         nome: f.nome.trim(), email: f.email.trim(), cpf: f.cpf.trim(), matricula: f.matricula.trim(),
         funcao: f.funcao.trim(), admissao: f.admissao, demissao: "", salario: num(f.salario),
-        pontoAtivo: !!f.pontoAtivo, regime: REGIME_PADRAO, nsr: 0, ferias: [], ativo: true,
+        pontoAtivo: !!f.pontoAtivo, despesasAtivo: !!f.despesasAtivo, regime: REGIME_PADRAO, nsr: 0, ferias: [], ativo: true,
         docs: {
           aso: { validade: f.aso, tipo: f.asoTipo, medico: "", obs: "" },
           epi: { validade: f.epi, obs: "" },
@@ -1736,6 +1134,9 @@ function FormNovoFuncionario({ perfil, aoFechar }) {
         <Sel rotulo="Bate ponto pelo app?" value={f.pontoAtivo ? "s" : "n"} onChange={(e) => setF({ ...f, pontoAtivo: e.target.value === "s" })}>
           <option value="s">Sim</option><option value="n">Não</option>
         </Sel>
+        <Sel rotulo="Faz relatório de despesas?" value={f.despesasAtivo ? "s" : "n"} onChange={(e) => setF({ ...f, despesasAtivo: e.target.value === "s" })}>
+          <option value="n">Não</option><option value="s">Sim</option>
+        </Sel>
         <Campo rotulo="Salário base (opcional)" sufixo="R$" inputMode="decimal" value={f.salario} onChange={m("salario")} placeholder="Só para conferência" />
       </div>
 
@@ -1765,6 +1166,7 @@ function FichaFuncionario({ f, perfil }) {
     aso: f.docs?.aso?.validade || "", asoTipo: f.docs?.aso?.tipo || "Periódico", asoMedico: f.docs?.aso?.medico || "",
     epi: f.docs?.epi?.validade || "", epiObs: f.docs?.epi?.obs || "",
     pontoAtivo: f.pontoAtivo !== false,
+    despesasAtivo: f.despesasAtivo === true,
     saldoInicialH: f.saldoInicialMin != null ? (f.saldoInicialMin / 60).toString().replace(".", ",") : "",
     regime: { ...REGIME_PADRAO, ...(f.regime || {}) },
   });
@@ -1777,7 +1179,7 @@ function FichaFuncionario({ f, perfil }) {
     await updateDoc(doc(db, "funcionarios", f.uid), {
       cpf: d.cpf.trim(), matricula: d.matricula.trim(), funcao: d.funcao.trim(),
       admissao: d.admissao, demissao: d.demissao, salario: num(d.salario),
-      pontoAtivo: d.pontoAtivo, regime: d.regime,
+      pontoAtivo: d.pontoAtivo, despesasAtivo: d.despesasAtivo, regime: d.regime,
       saldoInicialMin: d.saldoInicialH === "" ? 0 : Math.round((num(d.saldoInicialH) || 0) * 60),
       docs: {
         aso: { validade: d.aso, tipo: d.asoTipo, medico: d.asoMedico, obs: "" },
@@ -1785,7 +1187,7 @@ function FichaFuncionario({ f, perfil }) {
       },
       ultimaEdicao: { por: perfil.nome, em: agoraISO() },
     }).catch(() => setMsg("Falha ao salvar."));
-    updateDoc(doc(db, "usuarios", f.uid), { ponto: d.pontoAtivo }).catch(() => {});
+    updateDoc(doc(db, "usuarios", f.uid), { ponto: d.pontoAtivo, despesas: d.despesasAtivo }).catch(() => {});
     setMsg("ok"); setTimeout(() => setMsg(""), 2500);
   };
 
@@ -1840,6 +1242,9 @@ function FichaFuncionario({ f, perfil }) {
       <Sel rotulo="Bate ponto pelo app?" value={d.pontoAtivo ? "s" : "n"} onChange={(e) => setD({ ...d, pontoAtivo: e.target.value === "s" })}>
         <option value="s">Sim</option><option value="n">Não</option>
       </Sel>
+      <Sel rotulo="Faz relatório de despesas de viagem?" value={d.despesasAtivo ? "s" : "n"} onChange={(e) => setD({ ...d, despesasAtivo: e.target.value === "s" })}>
+        <option value="n">Não</option><option value="s">Sim</option>
+      </Sel>
       <Campo rotulo="Saldo inicial de banco de horas (opcional)" sufixo="h" inputMode="decimal"
         value={d.saldoInicialH} onChange={m("saldoInicialH")} placeholder="Ex.: 8 ou -4,5" />
       <div style={{ fontSize: 11.5, color: C.mut, marginTop: -6, marginBottom: 10 }}>
@@ -1884,12 +1289,10 @@ function ApuracaoPonto({ perfil }) {
   const [ym, setYm] = useState(mesRef());
   const [uid, setUid] = useState("");
   const [espelho, setEspelho] = useState(null);
-  const [correcao, setCorrecao] = useState(false);
   const [consolidado, setConsolidado] = useState(null);
   const [carregando, setCarregando] = useState("");
   const func = funcs.find((f) => f.uid === uid);
-  const pontoUidSelecionado = func?.pontoUid || func?.authUid || func?.docId || uid;
-  const mes = usePontoMesUnificado(func, func?.authUid || "", ym);
+  const mes = usePontoMes(uid, ym);
 
   const resumo = useMemo(() => (uid && cfg ? calcularMes({ ym, dias: mes, func, cfg }) : null), [uid, ym, mes, func, cfg]);
 
@@ -1898,14 +1301,9 @@ function ApuracaoPonto({ perfil }) {
     try {
       const s = await getDocs(query(collection(db, "ponto"), where("dataRef", ">=", `${ym}-01`), where("dataRef", "<=", `${ym}-31`)));
       const porUid = {};
-      s.docs.forEach((d) => {
-        const x = d.data();
-        const chave = x.funcionarioDocId || x.uid;
-        if (!chave || !x.dataRef) return;
-        (porUid[chave] ||= {})[x.dataRef] = pontoComAjuste(x);
-      });
+      s.docs.forEach((d) => { const x = d.data(); (porUid[x.uid] ||= {})[x.dataRef] = x; });
       const linhas = funcs.filter((f) => f.pontoAtivo !== false).map((f) => ({
-        f, ...calcularMes({ ym, dias: porUid[f.pontoUid || f.docId || f.uid] || {}, func: f, cfg }),
+        f, ...calcularMes({ ym, dias: porUid[f.uid] || {}, func: f, cfg }),
       }));
       setConsolidado({ ym, linhas });
     } catch { alert("Não foi possível consolidar. Verifique a internet."); }
@@ -1917,7 +1315,7 @@ function ApuracaoPonto({ perfil }) {
     const l = ["Data;Dia;Marcacoes (NSR:hora:tipo);Trabalhado;Previsto;Extra 60%;Extra 80%;Extra 100%;Noturno;Debito;Avisos"];
     resumo.linhas.forEach((x) => l.push([
       fmtBR(x.dataRef), DIA_ROT[x.chave],
-      x.marcacoes.map((m) => `${m.nsr}:${m.hora}:${m.tipo}${m.ajuste ? ":AJUSTE" : ""}`).join(" | "),
+      x.marcacoes.map((m) => `${m.nsr}:${m.hora}:${m.tipo}`).join(" | "),
       hhmm(x.trabalhado), hhmm(x.prevista), hhmm(x.extra1), hhmm(x.extra2), hhmm(x.extraEspecial), hhmm(x.noturno), hhmm(x.debito),
       x.avisos.join(" / "),
     ].join(";")));
@@ -1942,9 +1340,8 @@ function ApuracaoPonto({ perfil }) {
             {funcs.map((f) => <option key={f.uid} value={f.uid}>{f.nome}</option>)}
           </Sel>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <Btn onClick={() => (func ? setEspelho({ func, ym }) : alert("Selecione o funcionário."))}>📄 Espelho de ponto</Btn>
-          <Btn tom="claro" onClick={() => (func ? setCorrecao(true) : alert("Selecione o funcionário."))}>✏️ Corrigir ponto</Btn>
           <Btn tom="claro" onClick={exportarCSV} disabled={!resumo}>⬇️ Exportar CSV</Btn>
         </div>
         <div style={{ height: 8 }} />
@@ -1963,7 +1360,7 @@ function ApuracaoPonto({ perfil }) {
           <Linha k="Atrasos / saídas antecipadas" v={hhmm(resumo.t.debito)} />
           <Linha k="Faltas em dia útil" v={resumo.t.faltas} />
           <Linha k="Reflexo do DSR sobre extras (Súm. 172)" v={hhmm(resumo.t.dsr)} />
-          <BancoLinhaCoord uid={pontoUidSelecionado} func={func} cfg={cfg} ym={ym} />
+          <BancoLinhaCoord uid={uid} func={func} cfg={cfg} ym={ym} />
           {resumo.t.vlTotal != null && <Linha k="Estimativa de adicionais (conferência)" v={brl(resumo.t.vlTotal)} forte />}
           {resumo.t.avisos > 0 && (
             <div style={{ background: C.warnBg, color: C.amber, fontSize: 12.5, fontWeight: 700, borderRadius: 9, padding: "8px 12px", marginTop: 10 }}>
@@ -2000,260 +1397,8 @@ function ApuracaoPonto({ perfil }) {
         </Cartao>
       )}
 
-      {correcao && func && (
-        <EditorCorrecaoPonto
-          func={func}
-          ym={ym}
-          mes={mes}
-          perfil={perfil}
-          fechar={() => setCorrecao(false)}
-        />
-      )}
       {espelho && <EspelhoPonto {...espelho} cfg={cfg} perfil={perfil} fechar={() => setEspelho(null)} />}
     </>
-  );
-}
-
-// ----------------------------------------------------------------------------
-// Editor de correção de ponto — exclusivo da coordenação
-// ----------------------------------------------------------------------------
-function EditorCorrecaoPonto({ func, ym, mes, perfil, fechar }) {
-  const [dataRef, setDataRef] = useState(`${ym}-01`);
-  const [horas, setHoras] = useState(["", "", "", ""]);
-  const [afastamento, setAfastamento] = useState("");
-  const [motivo, setMotivo] = useState("");
-  const [salvando, setSalvando] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  const registro = mes[dataRef] || {};
-  const originais = registro.marcacoesOriginais || registro.marcacoes || [];
-  const ajusteAtual = registro.ajusteAtual;
-
-  useEffect(() => {
-    const base = registro.marcacoes || [];
-    setHoras([0, 1, 2, 3].map((i) => base[i]?.hora || ""));
-    setAfastamento(registro.afastamento || "");
-    setMotivo("");
-    setMsg("");
-  }, [dataRef, registro.ajusteAtual?.em, registro.marcacoes?.length]);
-
-  const salvar = async () => {
-    setMsg("");
-
-    if (!motivo.trim()) {
-      setMsg("Informe o motivo da correção.");
-      return;
-    }
-
-    const preenchidas = horas.filter(Boolean);
-    if (![0, 2, 4].includes(preenchidas.length)) {
-      setMsg("Informe 0, 2 ou 4 horários.");
-      return;
-    }
-
-    for (let i = 1; i < preenchidas.length; i++) {
-      if (hm(preenchidas[i]) <= hm(preenchidas[i - 1])) {
-        setMsg("Os horários devem estar em ordem crescente.");
-        return;
-      }
-    }
-
-    const tipos = ["entrada", "saida_almoco", "volta_almoco", "saida"];
-    const em = agoraISO();
-
-    const marcacoes = horas
-      .map((hora, i) => hora ? ({
-        nsr: `AJ-${Date.now()}-${i + 1}`,
-        tipo: tipos[i],
-        hora,
-        em,
-        origem: "Ajuste da coordenação",
-        ajuste: true,
-      }) : null)
-      .filter(Boolean);
-
-    const ajuste = {
-      id: rid(),
-      em,
-      por: perfil.nome,
-      uidCoordenador: perfil.uid,
-      motivo: motivo.trim(),
-      afastamento: afastamento.trim(),
-      marcacoes,
-      originalSnapshot: originais.map((m) => ({
-        nsr: m.nsr ?? "",
-        tipo: m.tipo || "",
-        hora: m.hora || "",
-        em: m.em || "",
-      })),
-    };
-
-    setSalvando(true);
-    try {
-      const pontoUid = func.pontoUid || func.authUid || func.docId || func.uid;
-
-      // Garante que a ficha selecionada continue vinculada ao cartão canônico.
-      await setDoc(doc(db, "funcionarios", func.docId || func.uid), {
-        pontoUid,
-        authUid: func.authUid || pontoUid,
-      }, { merge: true });
-
-      await setDoc(doc(db, "ponto", `${pontoUid}_${dataRef}`), {
-        uid: pontoUid,
-        funcionarioDocId: pontoUid,
-        authUid: func.authUid || "",
-        nome: func.nome,
-        dataRef,
-        matricula: func.matricula || "",
-        cpf: func.cpf || "",
-        afastamento: afastamento.trim(),
-        ajustes: arrayUnion(ajuste),
-        atualizadoEm: em,
-      }, { merge: true });
-
-      setMsg("ok");
-    } catch {
-      setMsg("Não foi possível salvar a correção.");
-    } finally {
-      setSalvando(false);
-    }
-  };
-
-  return createPortal(
-    <div
-      onClick={fechar}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 140,
-        background: "rgba(8,12,32,.78)",
-        overflowY: "auto",
-        padding: 18,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          borderRadius: 18,
-          padding: 20,
-          width: "100%",
-          maxWidth: 620,
-          margin: "20px auto",
-          fontFamily: F.body,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
-          <div>
-            <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 21, color: C.navy }}>
-              ✏️ Corrigir cartão de ponto
-            </div>
-            <div style={{ fontSize: 12.5, color: C.mut }}>
-              {func.nome} · {rotMes(ym)}
-            </div>
-          </div>
-          <button
-            onClick={fechar}
-            style={{ border: "none", background: "none", color: C.mut, fontWeight: 800, cursor: "pointer", fontSize: 18 }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <div style={{ background: C.blueBg, borderRadius: 10, padding: "9px 12px", fontSize: 12, lineHeight: 1.45, marginBottom: 12 }}>
-          As marcações originais não são apagadas. A correção registra responsável, data e justificativa.
-        </div>
-
-        <Campo
-          rotulo="Dia a corrigir"
-          type="date"
-          min={`${ym}-01`}
-          max={`${ym}-31`}
-          value={dataRef}
-          onChange={(e) => setDataRef(e.target.value)}
-        />
-
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.mut, marginBottom: 6 }}>
-          Marcações originais
-        </div>
-        <div style={{ background: C.grayBg, borderRadius: 10, padding: "9px 12px", fontSize: 13, marginBottom: 12 }}>
-          {originais.length
-            ? originais.map((m) => `${m.hora} · ${rotMarca(m.tipo)}`).join("  |  ")
-            : "Nenhuma marcação original neste dia."}
-        </div>
-
-        {ajusteAtual && (
-          <div style={{ background: C.warnBg, borderRadius: 10, padding: "9px 12px", fontSize: 12, color: C.amber, marginBottom: 12 }}>
-            Última correção: <b>{ajusteAtual.por}</b> · {new Date(ajusteAtual.em).toLocaleString("pt-BR")}
-            <br />
-            Motivo: {ajusteAtual.motivo}
-          </div>
-        )}
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          {["Entrada", "Saída para almoço", "Volta do almoço", "Saída"].map((rot, i) => (
-            <Campo
-              key={rot}
-              rotulo={rot}
-              type="time"
-              value={horas[i]}
-              onChange={(e) => setHoras((v) => v.map((x, j) => j === i ? e.target.value : x))}
-            />
-          ))}
-        </div>
-
-        <Campo
-          rotulo="Afastamento ou ocorrência (opcional)"
-          value={afastamento}
-          onChange={(e) => setAfastamento(e.target.value)}
-          placeholder="Ex.: atestado, folga autorizada, falta justificada"
-        />
-
-        <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: C.mut, marginBottom: 5 }}>
-            Justificativa da correção *
-          </span>
-          <textarea
-            value={motivo}
-            onChange={(e) => setMotivo(e.target.value)}
-            rows={3}
-            placeholder="Explique o motivo da correção."
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              resize: "vertical",
-              fontFamily: F.body,
-              fontSize: 15,
-              padding: 12,
-              borderRadius: 11,
-              border: `1.5px solid ${C.line}`,
-            }}
-          />
-        </label>
-
-        {msg === "ok" && (
-          <div style={{ color: C.ok, fontWeight: 700, textAlign: "center", marginBottom: 10 }}>
-            ✅ Correção registrada.
-          </div>
-        )}
-
-        {msg && msg !== "ok" && (
-          <div style={{ color: C.red, fontWeight: 600, fontSize: 13, marginBottom: 10 }}>
-            {msg}
-          </div>
-        )}
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <Btn tom="claro" onClick={() => setHoras(["", "", "", ""])}>
-            Limpar horários
-          </Btn>
-          <Btn tom="ok" onClick={salvar} disabled={salvando}>
-            {salvando ? "Salvando…" : "💾 Salvar correção"}
-          </Btn>
-        </div>
-      </div>
-    </div>,
-    document.body
   );
 }
 
@@ -2333,10 +1478,7 @@ function EspelhoPonto({ func, ym, cfg, perfil, fechar }) {
               <td style={{ ...tabTd, fontWeight: 800, color: l.extra2 ? C.navy : C.mut }}>{l.extra2 ? hhmm(l.extra2) : "—"}</td>
               <td style={{ ...tabTd, fontWeight: 800, color: l.extraEspecial ? C.red : C.mut }}>{l.extraEspecial ? hhmm(l.extraEspecial) : "—"}</td>
               <td style={{ ...tabTd, color: l.debito ? C.red : C.mut }}>{l.debito ? hhmm(l.debito) : "—"}</td>
-              <td style={{ ...tabTd, fontSize: 9.5, color: C.amber }}>
-                {mes[l.dataRef]?.ajusteAtual ? "✏ Corrigido pela coordenação. " : ""}
-                {l.feriado ? "Feriado. " : ""}{l.afastamento || ""}{l.avisos[0] || ""}
-              </td>
+              <td style={{ ...tabTd, fontSize: 9.5, color: C.amber }}>{l.feriado ? "Feriado. " : ""}{l.afastamento || ""}{l.avisos[0] || ""}</td>
             </tr>
           );
         })}</tbody>
