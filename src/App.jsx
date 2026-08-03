@@ -2587,74 +2587,11 @@ export default function App() {
   const [aba, setAba] = useState("");
   useEffect(() => onAuthStateChanged(auth, (u) => setUser(u || null)), []);
   useEffect(() => {
-    if (!user) {
-      setPerfil(null);
-      return;
-    }
-
-    let dadosUsuario = null;
-    let dadosFuncionario = null;
-    let usuarioCarregado = false;
-    let funcionarioCarregado = false;
-
-    const atualizarPerfil = () => {
-      if (!usuarioCarregado || !funcionarioCarregado) return;
-
-      if (!dadosUsuario) {
-        setPerfil({ uid: user.uid, semPerfil: true });
-        return;
-      }
-
-      setPerfil({
-        uid: user.uid,
-        ...dadosUsuario,
-
-        // As permissões podem estar tanto em usuarios/{uid} quanto em
-        // funcionarios/{uid}. Consideramos ativa quando qualquer uma estiver true.
-        ponto:
-          dadosUsuario.ponto === true ||
-          dadosFuncionario?.pontoAtivo === true,
-
-        despesas:
-          dadosUsuario.despesas === true ||
-          dadosFuncionario?.despesasAtivo === true,
-      });
-    };
-
-    const pararUsuario = onSnapshot(
-      doc(db, "usuarios", user.uid),
-      (snap) => {
-        usuarioCarregado = true;
-        dadosUsuario = snap.exists() ? snap.data() : null;
-        atualizarPerfil();
-      },
-      (erro) => {
-        console.error("Erro ao carregar perfil do usuário:", erro);
-        usuarioCarregado = true;
-        dadosUsuario = null;
-        atualizarPerfil();
-      }
-    );
-
-    const pararFuncionario = onSnapshot(
-      doc(db, "funcionarios", user.uid),
-      (snap) => {
-        funcionarioCarregado = true;
-        dadosFuncionario = snap.exists() ? snap.data() : null;
-        atualizarPerfil();
-      },
-      (erro) => {
-        console.error("Erro ao carregar ficha do funcionário:", erro);
-        funcionarioCarregado = true;
-        dadosFuncionario = null;
-        atualizarPerfil();
-      }
-    );
-
-    return () => {
-      pararUsuario();
-      pararFuncionario();
-    };
+    if (!user) { setPerfil(null); return; }
+    return onSnapshot(doc(db, "usuarios", user.uid), (s) => {
+      if (!s.exists()) return setPerfil({ uid: user.uid, semPerfil: true });
+      setPerfil({ uid: user.uid, ...s.data() });
+    });
   }, [user?.uid]);
 
   const abas = useMemo(() => {
@@ -2668,9 +2605,14 @@ export default function App() {
       { id: "despesas", ico: "🧾", rot: "Despesas" },
       { id: "relatorios", ico: "📄", rot: "Relatórios" }];
    if (perfil.papel === "usina") return [
-      { id: "nova", ico: "➕", rot: "Nova carga" }, { id: "dia", ico: "🚚", rot: "Cargas" },
+      { id: "nova", ico: "➕", rot: "Nova carga" },
+      { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "cap", ico: "🛢️", rot: "CAP" },
-     { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }, ...pt, ...dp];
+      { id: "ensaios", ico: "🧪", rot: "Ensaios" },
+      { id: "resumo", ico: "📊", rot: "Resumo" },
+      ...pt,
+      { id: "despesas", ico: "🧾", rot: "Despesas" },
+    ];
   if (perfil.papel === "diretoria") return [{ id: "tv", ico: "📺", rot: "Painel ao vivo" }, ...pt];
    if (perfil.papel === "ambos") return [
       { id: "nova", ico: "➕", rot: "Nova" }, { id: "dia", ico: "🚚", rot: "Cargas" },
