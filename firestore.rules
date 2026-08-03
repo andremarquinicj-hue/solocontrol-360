@@ -42,5 +42,42 @@ service cloud.firestore {
       allow read, create, update: if logado();
       allow delete: if coordenador();
     }
+
+    // ---- Módulo Pessoal (ponto · SST · férias) ----
+    match /funcionarios/{uid} {
+      allow read: if coordenador() || request.auth.uid == uid;
+      allow create, delete: if coordenador();
+      // O próprio funcionário só altera o contador de NSR ao bater o ponto.
+      allow update: if coordenador()
+        || (request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['nsr', 'ultimaMarcacao']));
+    }
+    match /ponto/{id} {
+      allow read: if coordenador() || resource.data.uid == request.auth.uid;
+      allow create: if logado() && request.resource.data.uid == request.auth.uid;
+      // APPEND-ONLY: nunca se apaga nem se encurta uma marcação registrada.
+      allow update: if (coordenador() || resource.data.uid == request.auth.uid)
+        && request.resource.data.marcacoes.size() >= resource.data.marcacoes.size();
+      allow delete: if false;
+    }
+    match /empresa/{id} {
+      allow read: if logado();
+      allow write: if coordenador();
+    }
+
+    // ---- Módulo CAP (recebimento de cimento asfáltico) ----
+    match /cap/{id} {
+      allow read, create, update: if logado();
+      allow delete: if coordenador();
+    }
+
+    // ---- Módulo Despesas de viagem ----
+    match /viagens/{id} {
+      allow read: if coordenador() || resource.data.uid == request.auth.uid;
+      allow create: if logado() && request.resource.data.uid == request.auth.uid;
+      allow update: if coordenador() || resource.data.uid == request.auth.uid;
+      allow delete: if coordenador() || resource.data.uid == request.auth.uid;
+    }
   }
 }
