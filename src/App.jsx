@@ -19,6 +19,7 @@ import {
 import { ref as sRef, uploadString, uploadBytes, getDownloadURL } from "firebase/storage";
 import { TelaPonto, CoordPessoal } from "./Pessoal.jsx";
 import { TelaCAP } from "./CAP.jsx";
+import { TelaDespesas, CoordDespesas } from "./Despesas.jsx";
 
 // ----------------------------------------------------------------------------
 // Parâmetros técnicos (DNIT 031/2006-ES — confirmar sempre com o projeto)
@@ -2595,24 +2596,26 @@ export default function App() {
 
   const abas = useMemo(() => {
     if (!perfil) return [];
-    const pt = perfil.ponto ? [{ id: "ponto", ico: "🕐", rot: "Ponto" }] : [];
-    if (perfil.papel === "funcionario") return [{ id: "ponto", ico: "🕐", rot: "Meu ponto" }];
+   const pt = perfil.ponto ? [{ id: "ponto", ico: "🕐", rot: "Ponto" }] : [];
+    const dp = perfil.despesas ? [{ id: "despesas", ico: "🧾", rot: "Despesas" }] : [];
+    if (perfil.papel === "funcionario") return [...(perfil.ponto ? [{ id: "ponto", ico: "🕐", rot: "Meu ponto" }] : []), ...dp];
     if (perfil.papel === "coordenador") return [
       { id: "painel", ico: "📊", rot: "Painel" }, { id: "obras", ico: "🏗️", rot: "Obras" },
-      { id: "equipe", ico: "👥", rot: "Equipe" }, { id: "pessoal", ico: "🪪", rot: "Pessoal" },
+     { id: "equipe", ico: "👥", rot: "Equipe" }, { id: "pessoal", ico: "🪪", rot: "Pessoal" },
+      { id: "despesas", ico: "🧾", rot: "Despesas" },
       { id: "relatorios", ico: "📄", rot: "Relatórios" }];
    if (perfil.papel === "usina") return [
       { id: "nova", ico: "➕", rot: "Nova carga" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "cap", ico: "🛢️", rot: "CAP" },
-      { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }, ...pt];
+     { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" }, ...pt, ...dp];
   if (perfil.papel === "diretoria") return [{ id: "tv", ico: "📺", rot: "Painel ao vivo" }, ...pt];
    if (perfil.papel === "ambos") return [
       { id: "nova", ico: "➕", rot: "Nova" }, { id: "dia", ico: "🚚", rot: "Cargas" },
       { id: "ensaios", ico: "🧪", rot: "Ensaios" }, { id: "resumo", ico: "📊", rot: "Resumo" },
       { id: "cap", ico: "🛢️", rot: "CAP" },
-      { id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar" }, ...pt];
-    return [{ id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar dia" }, ...pt];
-  }, [perfil?.papel, perfil?.ponto]);
+     { id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar" }, ...pt, ...dp];
+    return [{ id: "boletins", ico: "📋", rot: "Boletins" }, { id: "fechamento", ico: "🔒", rot: "Fechar dia" }, ...pt, ...dp];
+  }, [perfil?.papel, perfil?.ponto, perfil?.despesas]);
   useEffect(() => { if (abas.length && !abas.find((a) => a.id === aba)) setAba(abas[0].id); }, [abas]);
 
   if (user === undefined) return null;
@@ -2628,8 +2631,10 @@ export default function App() {
      <Shell perfil={perfil} abas={abas} aba={aba} setAba={setAba}>
           {aba === "ponto" && <TelaPonto perfil={perfil} />}
           {aba === "pessoal" && perfil.papel === "coordenador" && <CoordPessoal perfil={perfil} />}
-       {aba === "cap" && <TelaCAP perfil={perfil} />}
-        {perfil.papel === "coordenador" && !["pessoal", "ponto", "cap"].includes(aba) && <TelaCoordenador perfil={perfil} aba={aba} />}
+      {aba === "cap" && <TelaCAP perfil={perfil} />}
+          {aba === "despesas" && perfil.papel === "coordenador" && <CoordDespesas perfil={perfil} />}
+          {aba === "despesas" && perfil.papel !== "coordenador" && <TelaDespesas perfil={perfil} />}
+        {perfil.papel === "coordenador" && !["pessoal", "ponto", "cap", "despesas"].includes(aba) && <TelaCoordenador perfil={perfil} aba={aba} />}
         {(perfil.papel === "usina" || perfil.papel === "ambos") && ["nova", "dia", "ensaios", "resumo"].includes(aba) && (
           aba === "nova" ? <UsinaNovaCarga perfil={perfil} /> :
           aba === "dia" ? <UsinaCargasDia perfil={perfil} /> :
